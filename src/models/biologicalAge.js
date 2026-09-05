@@ -5,7 +5,7 @@
  *
  * Dieses Modul berechnet ein geschätztes "biologisches Alter" aus:
  *   1. dem chronologischen Alter (manuell im Onboarding eingegeben),
- *   2. automatisch aus Fitbit geladenen Vitalwerten (gemittelt über ein
+ *   2. automatisch aus Google Health geladenen Vitalwerten (gemittelt über ein
  *      Zeitfenster, typischerweise die letzten 30 Tage),
  *   3. manuell im Lifestyle-Fragebogen eingegebenen Faktoren
  *      (Rauchen, Alkohol, Ernährung, Stress).
@@ -44,7 +44,7 @@
 // ---------------------------------------------------------------------------
 
 export const BIOLOGICAL_AGE_CONFIG = {
-  // Ab wie vielen Tagen mit Fitbit-Daten gilt die Berechnung als
+  // Ab wie vielen Tagen mit Messdaten gilt die Berechnung als
   // "verlässlich genug" (Confidence-Indikator). Vorher: "niedrig".
   confidence: {
     lowBelowDays: 20,
@@ -345,7 +345,7 @@ function computeSmokingYears(smokingConfig, lifestyle) {
  * @param {number} [input.avgBreathingRate]
  * @param {number} [input.bmi] Aus Gewicht/Größe des Profils berechnet.
  * @param {object} [input.lifestyle] { smokingStatus, cigarettesPerDay, alcoholUnitsPerWeek, dietScore, stressLevel }
- * @param {number} input.daysOfData Anzahl Tage mit mind. einem Fitbit-Messwert (für Confidence).
+ * @param {number} input.daysOfData Anzahl Tage mit mind. einem Messwert (für Confidence).
  *
  * @returns {{
  *   biologicalAge: number,
@@ -427,6 +427,9 @@ export function computeBiologicalAge(input) {
     biologicalAge,
     deltaYears: Math.round(deltaYears * 10) / 10,
     confidence,
+    // Wird mitgespeichert, damit die App erkennt, ob eine gespeicherte
+    // Berechnung auf einer dünneren Datenlage beruht als inzwischen vorliegt.
+    daysOfData: input.daysOfData,
     breakdown,
   };
 }

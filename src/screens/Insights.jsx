@@ -33,7 +33,7 @@ function generateInsights(dayRecords, bioAge) {
       {
         severity: "info",
         title: "Noch keine Daten",
-        text: "Sobald der erste Sync mit Fitbit durchgelaufen ist, erscheinen hier automatisch Hinweise zu Abweichungen von deiner persönlichen Baseline.",
+        text: "Sobald der erste Sync mit Google Health durchgelaufen ist, erscheinen hier automatisch Hinweise zu Abweichungen von deiner persönlichen Baseline.",
       },
     ];
   }

@@ -11,7 +11,7 @@
 
 import React, { createContext, useContext, useEffect, useReducer, useCallback, useMemo, useRef } from "react";
 import * as db from "../storage/db.js";
-import { isConnected as isFitbitConnected } from "../auth/fitbitAuth.js";
+import { isConnected as isGoogleConnected } from "../auth/googleAuth.js";
 import { syncNow } from "../api/sync.js";
 import { computeBiologicalAge } from "../models/biologicalAge.js";
 import { computeBaseline, computeWeeklyActiveMinutes, computeSleepConsistencyStdDevMinutes, countDaysWithData } from "../models/baseline.js";
@@ -122,7 +122,7 @@ export function AppStateProvider({ children }) {
       dispatch({
         type: "BOOTSTRAP",
         payload: {
-          connected: isFitbitConnected(),
+          connected: isGoogleConnected(),
           profile: profile ?? null,
           lifestyle: lifestyle ?? null,
           lifestyleHistory: lifestyleHistory ?? [],
@@ -180,11 +180,21 @@ export function AppStateProvider({ children }) {
    */
   const recomputeBioAge = useCallback(async ({ force = false } = {}) => {
     const current = stateRef.current;
+    if (!current.profile) return null;
+
     const last = current.bioAge?.computedAt ? new Date(current.bioAge.computedAt) : null;
     const daysSinceLast = last ? (Date.now() - last.getTime()) / 86_400_000 : Infinity;
-    if (!force && daysSinceLast < BIO_AGE_RECOMPUTE_INTERVAL_DAYS) return current.bioAge;
 
-    if (!current.profile) return null;
+    // Zusätzlich zum Wochenintervall neu rechnen, wenn seit der letzten
+    // Berechnung Messtage dazugekommen sind. Ohne diese Prüfung bliebe z.B.
+    // ein Wert, der direkt nach dem Verbinden noch ohne Daten entstanden ist,
+    // eine ganze Woche lang stehen – samt fälschlich niedriger Konfidenz.
+    const daysNow = countDaysWithData(current.dayRecords);
+    const hasMoreDataThanBefore = current.bioAge?.daysOfData != null && daysNow > current.bioAge.daysOfData;
+
+    if (!force && !hasMoreDataThanBefore && daysSinceLast < BIO_AGE_RECOMPUTE_INTERVAL_DAYS) {
+      return current.bioAge;
+    }
     const input = buildBioAgeInput(current.dayRecords, current.profile, current.lifestyle);
     const result = computeBiologicalAge(input);
     const withMeta = { ...result, computedAt: new Date().toISOString() };

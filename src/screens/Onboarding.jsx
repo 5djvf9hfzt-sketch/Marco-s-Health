@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAppState } from "../state/store.jsx";
-import { startLogin } from "../auth/fitbitAuth.js";
+import { startLogin } from "../auth/googleAuth.js";
 import Disclaimer from "../components/Disclaimer.jsx";
 
 function StepDots({ current, total = 3 }) {
@@ -29,7 +29,7 @@ function ConnectStep({ authErrorMessage }) {
       <h1 className="hero-title">VitalSync</h1>
       <p className="hero-text">
         Dein Gesundheits-Dashboard: tägliche Recovery-, Strain- und Sleep-Scores
-        plus ein biologisches Alter – berechnet aus deinen Fitbit-Daten.
+        plus ein biologisches Alter – berechnet aus deinen Google-Health-Daten.
       </p>
 
       <div style={{ marginBottom: 26 }}>
@@ -59,7 +59,7 @@ function ConnectStep({ authErrorMessage }) {
           startLogin();
         }}
       >
-        {isRedirecting ? "Weiterleitung zu Fitbit …" : "Mit Fitbit verbinden"}
+        {isRedirecting ? "Weiterleitung zu Google …" : "Mit Google verbinden"}
       </button>
 
       <Disclaimer />
@@ -279,7 +279,7 @@ function LifestyleStep() {
 
       {state.isSyncing && (
         <p style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 14, textAlign: "center" }}>
-          Fitbit-Historie wird im Hintergrund geladen
+          Historie wird im Hintergrund geladen
           {state.syncProgress ? ` · ${state.syncProgress.completed}/${state.syncProgress.total}` : " …"}
         </p>
       )}

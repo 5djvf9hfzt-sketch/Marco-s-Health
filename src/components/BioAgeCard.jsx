@@ -37,7 +37,7 @@ export function BioAgeHero({ bioAge, chronologicalAge }) {
       <div className="card bio-hero">
         <div className="eyebrow">Biologisches Alter</div>
         <p className="empty-state">
-          Wird berechnet, sobald Profil und erste Fitbit-Daten vorliegen.
+          Wird berechnet, sobald Profil und erste Gesundheitsdaten vorliegen.
         </p>
       </div>
     );

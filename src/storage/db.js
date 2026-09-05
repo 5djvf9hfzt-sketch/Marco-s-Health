@@ -16,7 +16,7 @@
  *
  * Zwei getrennte Object-Stores:
  *  - "vitalsync-app"  -> wenige, kleine Einzelwerte (Profil, Lifestyle, Sync-Status, Bio-Age-Ergebnis)
- *  - "vitalsync-days" -> ein Eintrag pro Kalendertag mit allen Fitbit-Rohmetriken
+ *  - "vitalsync-days" -> ein Eintrag pro Kalendertag mit allen Rohmetriken
  */
 
 import { createStore, get, set, del, clear, entries, setMany } from "idb-keyval";

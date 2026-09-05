@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useAppState } from "./state/store.jsx";
-import { handleRedirectCallback } from "./auth/fitbitAuth.js";
+import { handleRedirectCallback } from "./auth/googleAuth.js";
 import Onboarding from "./screens/Onboarding.jsx";
 import Home from "./screens/Home.jsx";
 import Trends from "./screens/Trends.jsx";
@@ -14,9 +14,8 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState("checking");
   const [authErrorMessage, setAuthErrorMessage] = useState("");
   const hasSynced = useRef(false);
-  const hasComputedBioAge = useRef(false);
 
-  // Einmalig beim App-Start prüfen, ob wir gerade von Fitbits
+  // Einmalig beim App-Start prüfen, ob wir gerade von Googles
   // Zustimmungsseite zurückkommen (?code=...&state=...).
   useEffect(() => {
     (async () => {
@@ -30,7 +29,7 @@ export default function App() {
     })();
   }, [actions]);
 
-  // Genau ein Sync pro App-Start, sobald eine Fitbit-Verbindung besteht.
+  // Genau ein Sync pro App-Start, sobald eine Google-Verbindung besteht.
   // Beim ersten Mal ist das der 90-Tage-Backfill, danach nur noch die neuen
   // Tage. Läuft bewusst schon während des Onboardings mit, damit die Historie
   // bereits geladen ist, wenn der Nutzer den Fragebogen abgeschlossen hat.
@@ -40,15 +39,16 @@ export default function App() {
     actions.runSync().catch((err) => console.warn("Sync fehlgeschlagen:", err));
   }, [state.bootstrapped, state.connected, actions]);
 
-  // Bio-Age berechnen, sobald Profil, Fragebogen und Daten vorliegen.
-  // recomputeBioAge() prüft selbst, ob die letzte Berechnung älter als eine
-  // Woche ist – häufigeres Aufrufen ist also unschädlich.
+  // Bio-Age berechnen, sobald Profil, Fragebogen und Daten vorliegen – und
+  // erneut, wenn ein Sync neue Messtage gebracht hat. recomputeBioAge()
+  // entscheidet selbst, ob eine Neuberechnung nötig ist (Wochenintervall bzw.
+  // gewachsene Datenlage), deshalb ist ein häufigerer Aufruf unschädlich und
+  // es braucht hier bewusst KEINE Einmal-Sperre.
   useEffect(() => {
-    if (!state.bootstrapped || state.isSyncing || hasComputedBioAge.current) return;
+    if (!state.bootstrapped || state.isSyncing) return;
     if (!state.profile || !state.lifestyle) return;
-    hasComputedBioAge.current = true;
     actions.recomputeBioAge().catch((err) => console.warn("Bio-Age-Berechnung fehlgeschlagen:", err));
-  }, [state.bootstrapped, state.isSyncing, state.profile, state.lifestyle, actions]);
+  }, [state.bootstrapped, state.isSyncing, state.profile, state.lifestyle, state.dayRecords, actions]);
 
   if (!state.bootstrapped || authStatus === "checking") {
     return (

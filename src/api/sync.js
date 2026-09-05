@@ -1,32 +1,33 @@
 /**
- * Sync-Orchestrierung
- * =====================
- * Steuert, WANN und WIEVIEL von Fitbit geladen wird:
+ * Sync-Orchestrierung (Google Health API)
+ * =========================================
+ * Steuert, WANN und WIEVIEL geladen wird:
  *  - Erststart: 90 Tage Historie (INITIAL_BACKFILL_DAYS) für sofortige Baselines.
  *  - Danach: bei jedem App-Öffnen nur die Tage seit dem letzten Sync nachziehen.
  *
- * Alles läuft ausschließlich, wenn die App offen ist ("wenn die App geöffnet
- * wird") – es gibt bewusst keinen Hintergrund-Sync, keinen Server-Cron-Job,
- * keine Push-Benachrichtigungen. Ein Service Worker kann Daten NICHT im
- * Hintergrund von Fitbit nachladen, wenn die App geschlossen ist – das ist
- * technisch gar nicht vorgesehen (kein Backend, das das anstoßen könnte).
+ * Alles läuft ausschließlich, wenn die App offen ist – es gibt bewusst keinen
+ * Hintergrund-Sync, keinen Server-Cron-Job und keine Push-Benachrichtigungen.
  *
- * Datenlücken: Wenn Fitbit für einen Tag z.B. keinen Schlafeintrag hat (Uhr
- * nicht getragen/nicht geladen), lassen wir dieses Feld für den Tag einfach
- * weg (undefined), statt 0 einzutragen. Downstream-Berechnungen
- * (baseline.js, scores.js, biologicalAge.js) müssen defensiv mit fehlenden
- * Feldern umgehen und dürfen sie nie als "0 = schlechtester Wert" fehlinterpretieren.
+ * Diese Datei ist die EINZIGE Stelle, die das Antwortformat der Google Health
+ * API kennt. Sie übersetzt es in das interne Tagesformat
+ * ({ [YYYY-MM-DD]: { restingHeartRate, hrv, sleepDurationMin, ... } }), mit
+ * dem alle Berechnungen (baseline.js, scores.js, biologicalAge.js) und die
+ * gesamte Oberfläche arbeiten. Ein späterer Anbieterwechsel berührt deshalb
+ * nur diese Datei und den API-Client daneben.
+ *
+ * Datenlücken: Fehlt für einen Tag ein Wert (Uhr nicht getragen/geladen),
+ * lassen wir das Feld weg (undefined), statt 0 einzutragen. Google dokumentiert
+ * ausdrücklich, dass ein fehlender Tag NICHT als Null zu lesen ist – ein
+ * ausdrücklich gelieferter Wert "0" dagegen schon.
  */
 
 import { INITIAL_BACKFILL_DAYS } from "../config.js";
-import * as api from "./fitbitApi.js";
+import { DATA_TYPES, listDataPoints, dailyRollUp, civilDateToIso, addDays } from "./googleHealthApi.js";
 import { getSyncState, setSyncState, setDays, getAllDays } from "../storage/db.js";
 
 // Nach einem erfolgreichen Sync ziehen wir zusätzlich diese Anzahl Tage VOR
-// dem letzten Sync nochmal nach. Grund: Fitbit korrigiert Tageswerte
-// manchmal nachträglich (z.B. Schlaf, der über Mitternacht hinausgeht und
-// erst Stunden später final berechnet wird), ein reiner "ab morgen"-Sync
-// würde solche Nachkorrekturen sonst dauerhaft verpassen.
+// dem letzten Sync nochmal nach, weil Werte nachträglich korrigiert werden
+// können (z.B. Schlaf, der erst Stunden später fertig ausgewertet ist).
 const INCREMENTAL_OVERLAP_DAYS = 3;
 
 function isoDaysAgo(days) {
@@ -39,145 +40,225 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function toNumberOrUndefined(value) {
+/** int64-Felder liefert die API als String, double-Felder als Zahl – beides sauber zu Number. */
+function num(value) {
+  if (value == null) return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
 }
 
-/** cardioScore.value.vo2Max kommt teils als Bereich ("42-46"), teils als
- * Einzelwert – wir nehmen im Bereichsfall den Mittelwert. */
-function parseVo2Max(raw) {
-  if (raw == null) return undefined;
-  const str = String(raw);
-  if (str.includes("-")) {
-    const [lo, hi] = str.split("-").map(Number);
-    if (Number.isFinite(lo) && Number.isFinite(hi)) return (lo + hi) / 2;
-    return undefined;
-  }
-  return toNumberOrUndefined(str);
-}
-
-function sumZoneMinutes(heartRateZones, zoneNames) {
-  if (!Array.isArray(heartRateZones)) return undefined;
-  const relevant = heartRateZones.filter((z) => zoneNames.includes(z.name));
-  if (relevant.length === 0) return undefined;
-  return relevant.reduce((sum, z) => sum + (z.minutes ?? 0), 0);
+/** Extrahiert das Datum (YYYY-MM-DD) aus einem Zeitstempel. */
+function localDateFromTimestamp(timestamp) {
+  return typeof timestamp === "string" && timestamp.length >= 10 ? timestamp.slice(0, 10) : null;
 }
 
 /**
- * Holt alle Fitbit-Endpunkte für [startIso, endIso] parallel und führt sie zu
- * einer { [date]: {...} } Struktur zusammen. Jeder einzelne Endpunkt wird
- * separat abgefangen (Promise.allSettled) – z.B. wenn ein Account keine
- * Cardio-Fitness-Werte liefert, soll das nicht den kompletten Sync stoppen.
+ * Rechnet einen UTC-Zeitstempel der API in die lokale Uhrzeit des Nutzers um.
+ *
+ * Die Google Health API liefert Zeitpunkte in UTC (z.B. "2026-09-04T21:41:30Z")
+ * und den zugehörigen Zeitzonen-Versatz separat als Dauer (z.B. "7200s").
+ * Für die Frage "wann bin ich eingeschlafen?" zählt aber die Uhr am
+ * Handgelenk, nicht UTC. Wir geben deshalb einen Zeitstempel OHNE
+ * Zeitzonen-Kennung zurück, dessen Uhrzeit bereits die lokale ist – genau das
+ * Format, das die Auswertung der Schlaf-Konsistenz erwartet.
+ */
+function toLocalWallClock(utcTimestamp, utcOffset) {
+  if (!utcTimestamp) return undefined;
+  const parsed = Date.parse(utcTimestamp);
+  if (!Number.isFinite(parsed)) return undefined;
+
+  const offsetSeconds = Number(String(utcOffset ?? "0s").replace(/s$/, ""));
+  const shifted = new Date(parsed + (Number.isFinite(offsetSeconds) ? offsetSeconds : 0) * 1000);
+  return shifted.toISOString().slice(0, 19); // "YYYY-MM-DDTHH:MM:SS", ohne "Z"
+}
+
+/**
+ * Holt alle benötigten Datentypen für [startIso, endIso] und führt sie zu
+ * einer { [date]: {...} }-Struktur zusammen. Jeder Typ wird einzeln
+ * abgesichert: Liefert einer davon einen Fehler (fehlende Berechtigung, vom
+ * Gerät nicht unterstützter Wert), läuft der Rest trotzdem durch.
  */
 async function fetchAndMergeRange(startIso, endIso, onProgress) {
-  const tasks = [
-    ["heart", api.getHeartRateSeries],
-    ["sleep", api.getSleepSeries],
-    ["steps", api.getStepsSeries],
-    ["calories", api.getCaloriesSeries],
-    ["fairlyActive", api.getFairlyActiveMinutesSeries],
-    ["veryActive", api.getVeryActiveMinutesSeries],
-    ["hrv", api.getHrvSeries],
-    ["spo2", api.getSpo2Series],
-    ["breathingRate", api.getBreathingRateSeries],
-    ["cardioScore", api.getCardioScoreSeries],
-  ];
-
-  const days = {}; // date -> partial metrics
+  const days = {};
   const errors = [];
-
   const ensure = (date) => {
     if (!days[date]) days[date] = {};
     return days[date];
   };
 
-  let completed = 0;
-  for (const [name, fn] of tasks) {
-    try {
-      const series = await fn(startIso, endIso);
+  const tasks = [
+    {
+      name: "Ruhepuls",
+      run: async () => {
+        const points = await listDataPoints(DATA_TYPES.dailyRestingHeartRate, startIso, endIso);
+        points.forEach((p) => {
+          const value = p.dailyRestingHeartRate;
+          const date = civilDateToIso(value?.date);
+          if (date) ensure(date).restingHeartRate = num(value.beatsPerMinute);
+        });
+      },
+    },
+    {
+      name: "HRV",
+      run: async () => {
+        const points = await listDataPoints(DATA_TYPES.dailyHrv, startIso, endIso);
+        points.forEach((p) => {
+          const value = p.dailyHeartRateVariability;
+          const date = civilDateToIso(value?.date);
+          if (!date) return;
+          const day = ensure(date);
+          day.hrv = num(value.averageHeartRateVariabilityMilliseconds);
+          day.hrvDeepSleep = num(value.deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds);
+        });
+      },
+    },
+    {
+      name: "Sauerstoffsättigung",
+      run: async () => {
+        const points = await listDataPoints(DATA_TYPES.dailySpo2, startIso, endIso);
+        points.forEach((p) => {
+          const value = p.dailyOxygenSaturation;
+          const date = civilDateToIso(value?.date);
+          if (date) ensure(date).spo2 = num(value.averagePercentage);
+        });
+      },
+    },
+    {
+      name: "Atemfrequenz",
+      run: async () => {
+        const points = await listDataPoints(DATA_TYPES.dailyRespiratoryRate, startIso, endIso);
+        points.forEach((p) => {
+          const value = p.dailyRespiratoryRate;
+          const date = civilDateToIso(value?.date);
+          if (date) ensure(date).breathingRate = num(value.breathsPerMinute);
+        });
+      },
+    },
+    {
+      name: "VO2max",
+      run: async () => {
+        const points = await listDataPoints(DATA_TYPES.dailyVo2Max, startIso, endIso);
+        points.forEach((p) => {
+          const value = p.dailyVo2Max;
+          const date = civilDateToIso(value?.date);
+          if (date) ensure(date).cardioFitness = num(value.vo2Max);
+        });
+      },
+    },
+    {
+      name: "Schlaf",
+      run: async () => {
+        const points = await listDataPoints(DATA_TYPES.sleep, startIso, endIso);
+        points.forEach((p) => {
+          const sleep = p.sleep;
+          if (!sleep) return;
+          // Nickerchen und Teilschlafphasen ignorieren – uns interessiert die
+          // Hauptschlafphase der Nacht, analog zur bisherigen Auswertung.
+          if (sleep.metadata?.nap === true) return;
+          if (sleep.metadata?.mainSleep === false) return;
 
-      if (name === "heart") {
-        series.forEach((entry) => {
-          const day = ensure(entry.dateTime);
-          day.restingHeartRate = toNumberOrUndefined(entry.value?.restingHeartRate);
-          day.moderateVigorousZoneMinutes = sumZoneMinutes(entry.value?.heartRateZones, ["Cardio", "Peak"]);
-          day.fatBurnZoneMinutes = sumZoneMinutes(entry.value?.heartRateZones, ["Fat Burn"]);
-        });
-      } else if (name === "sleep") {
-        series
-          .filter((entry) => entry.isMainSleep !== false)
-          .forEach((entry) => {
-            const date = entry.dateOfSleep ?? entry.dateTime;
-            if (!date) return;
-            const day = ensure(date);
-            const summary = entry.levels?.summary ?? {};
-            day.sleepDurationMin = toNumberOrUndefined(entry.minutesAsleep);
-            day.sleepEfficiency = toNumberOrUndefined(entry.efficiency);
-            day.timeInBedMin = toNumberOrUndefined(entry.timeInBed);
-            day.minutesAwake = toNumberOrUndefined(entry.minutesAwake);
-            day.awakeningsCount = toNumberOrUndefined(summary.wake?.count);
-            day.sleepStages = {
-              deep: toNumberOrUndefined(summary.deep?.minutes),
-              light: toNumberOrUndefined(summary.light?.minutes),
-              rem: toNumberOrUndefined(summary.rem?.minutes),
-              wake: toNumberOrUndefined(summary.wake?.minutes),
-            };
-            day.sleepStartTime = entry.startTime;
-            day.sleepEndTime = entry.endTime;
+          // Eine Nacht zählt zu dem Tag, an dem man aufgewacht ist.
+          const date =
+            civilDateToIso(sleep.interval?.civilEndTime?.date) ?? localDateFromTimestamp(sleep.interval?.endTime);
+          if (!date) return;
+
+          const day = ensure(date);
+          const summary = sleep.summary ?? {};
+          const minutesAsleep = num(summary.minutesAsleep);
+          const minutesInBed = num(summary.minutesInSleepPeriod);
+
+          day.sleepDurationMin = minutesAsleep;
+          day.timeInBedMin = minutesInBed;
+          day.minutesAwake = num(summary.minutesAwake);
+          // Die Google Health API liefert keine fertige Schlafeffizienz –
+          // wir berechnen sie wie üblich als Schlafzeit / Zeit im Bett.
+          day.sleepEfficiency =
+            minutesAsleep != null && minutesInBed > 0 ? Math.round((minutesAsleep / minutesInBed) * 100) : undefined;
+
+          const stages = { deep: undefined, light: undefined, rem: undefined, wake: undefined };
+          (summary.stagesSummary ?? []).forEach((stage) => {
+            const minutes = num(stage.minutes);
+            switch (stage.type) {
+              case "DEEP":
+                stages.deep = minutes;
+                break;
+              case "LIGHT":
+              case "ASLEEP":
+                stages.light = (stages.light ?? 0) + (minutes ?? 0);
+                break;
+              case "REM":
+                stages.rem = minutes;
+                break;
+              case "AWAKE":
+              case "RESTLESS":
+                stages.wake = (stages.wake ?? 0) + (minutes ?? 0);
+                day.awakeningsCount = num(stage.count) ?? day.awakeningsCount;
+                break;
+              default:
+                break;
+            }
           });
-      } else if (name === "steps") {
-        series.forEach((entry) => {
-          ensure(entry.dateTime).steps = toNumberOrUndefined(entry.value);
+          day.sleepStages = stages;
+          day.sleepStartTime = toLocalWallClock(sleep.interval?.startTime, sleep.interval?.startUtcOffset);
+          day.sleepEndTime = toLocalWallClock(sleep.interval?.endTime, sleep.interval?.endUtcOffset);
         });
-      } else if (name === "calories") {
-        series.forEach((entry) => {
-          ensure(entry.dateTime).calories = toNumberOrUndefined(entry.value);
+      },
+    },
+    {
+      name: "Schritte",
+      run: async () => {
+        const points = await dailyRollUp(DATA_TYPES.steps, startIso, endIso);
+        points.forEach((p) => {
+          const date = civilDateToIso(p.civilStartTime?.date);
+          const value = num(p.steps?.countSum);
+          if (date && value !== undefined) ensure(date).steps = value;
         });
-      } else if (name === "fairlyActive") {
-        series.forEach((entry) => {
-          ensure(entry.dateTime).fairlyActiveMinutes = toNumberOrUndefined(entry.value);
+      },
+    },
+    {
+      name: "Kalorien",
+      run: async () => {
+        const points = await dailyRollUp(DATA_TYPES.totalCalories, startIso, endIso);
+        points.forEach((p) => {
+          const date = civilDateToIso(p.civilStartTime?.date);
+          const value = num(p.totalCalories?.kcalSum);
+          if (date && value !== undefined) ensure(date).calories = value;
         });
-      } else if (name === "veryActive") {
-        series.forEach((entry) => {
-          ensure(entry.dateTime).veryActiveMinutes = toNumberOrUndefined(entry.value);
+      },
+    },
+    {
+      name: "Zonenminuten",
+      run: async () => {
+        const points = await dailyRollUp(DATA_TYPES.activeZoneMinutes, startIso, endIso);
+        points.forEach((p) => {
+          const date = civilDateToIso(p.civilStartTime?.date);
+          const zones = p.activeZoneMinutes;
+          if (!date || !zones) return;
+          const day = ensure(date);
+          const fatBurn = num(zones.sumInFatBurnHeartZone);
+          const cardio = num(zones.sumInCardioHeartZone);
+          const peak = num(zones.sumInPeakHeartZone);
+
+          // "Fat Burn" entspricht der leichten Belastung, Cardio + Peak der
+          // moderaten bis intensiven – dieselbe Aufteilung wie bisher.
+          if (fatBurn !== undefined) day.fatBurnZoneMinutes = fatBurn;
+          if (cardio !== undefined || peak !== undefined) {
+            day.moderateVigorousZoneMinutes = (cardio ?? 0) + (peak ?? 0);
+          }
         });
-      } else if (name === "hrv") {
-        series.forEach((entry) => {
-          const day = ensure(entry.dateTime);
-          day.hrv = toNumberOrUndefined(entry.value?.dailyRmssd);
-          day.hrvDeepSleep = toNumberOrUndefined(entry.value?.deepRmssd);
-        });
-      } else if (name === "spo2") {
-        series.forEach((entry) => {
-          const date = entry.dateTime;
-          if (!date) return;
-          const value = entry.value ?? entry;
-          ensure(date).spo2 = toNumberOrUndefined(value.avg);
-        });
-      } else if (name === "breathingRate") {
-        series.forEach((entry) => {
-          const date = entry.dateTime;
-          if (!date) return;
-          const value = entry.value ?? entry;
-          ensure(date).breathingRate = toNumberOrUndefined(value.breathingRate ?? value.fullSleepSummary?.breathingRate);
-        });
-      } else if (name === "cardioScore") {
-        series.forEach((entry) => {
-          const date = entry.dateTime;
-          if (!date) return;
-          const values = Array.isArray(entry.value) ? entry.value : [entry.value];
-          const vo2Max = parseVo2Max(values?.[0]?.vo2Max);
-          if (vo2Max !== undefined) ensure(date).cardioFitness = vo2Max;
-        });
-      }
+      },
+    },
+  ];
+
+  let completed = 0;
+  for (const task of tasks) {
+    try {
+      await task.run();
     } catch (err) {
-      // Ein fehlender Scope, eine nicht unterstützte Uhr oder ein temporärer
-      // Fitbit-Fehler bei EINEM Endpunkt darf den restlichen Sync nicht stoppen.
-      errors.push(`${name}: ${err.message}`);
+      errors.push(`${task.name}: ${err.message}`);
     }
     completed += 1;
-    onProgress?.({ completed, total: tasks.length, currentEndpoint: name });
+    onProgress?.({ completed, total: tasks.length, currentEndpoint: task.name });
   }
 
   return { days, errors, totalEndpoints: tasks.length };
@@ -191,10 +272,10 @@ export async function runInitialBackfill(onProgress) {
   const { days, errors, totalEndpoints } = await fetchAndMergeRange(startIso, endIso, onProgress);
   await setDays(days);
 
-  // Nur wenn mindestens ein Endpunkt geantwortet hat, gilt der Backfill als
-  // erledigt. Sonst (z.B. Relay nicht erreichbar, Token abgelaufen, offline)
-  // würde die App den 90-Tage-Nachlauf nie wieder versuchen und dauerhaft mit
-  // einem leeren Dashboard dastehen.
+  // Nur wenn mindestens ein Datentyp geantwortet hat, gilt der Backfill als
+  // erledigt. Sonst (offline, Token abgelaufen, Berechtigung fehlt) würde die
+  // App den 90-Tage-Nachlauf nie wieder versuchen und dauerhaft mit einem
+  // leeren Dashboard dastehen.
   if (errors.length < totalEndpoints) {
     await setSyncState({ backfillComplete: true, lastSyncedDate: endIso });
   }
@@ -210,9 +291,7 @@ export async function runIncrementalSync(onProgress) {
   }
 
   const overlapStart = state.lastSyncedDate
-    ? new Date(new Date(state.lastSyncedDate).getTime() - INCREMENTAL_OVERLAP_DAYS * 86_400_000)
-        .toISOString()
-        .slice(0, 10)
+    ? addDays(state.lastSyncedDate, -INCREMENTAL_OVERLAP_DAYS)
     : isoDaysAgo(INCREMENTAL_OVERLAP_DAYS);
   const endIso = todayIso();
 
@@ -228,7 +307,7 @@ export async function runIncrementalSync(onProgress) {
   return { daysSynced: Object.keys(days).length, errors };
 }
 
-/** Bequemer Einstiegspunkt für App.jsx: entscheidet selbst, ob Backfill oder Incremental-Sync nötig ist. */
+/** Einstiegspunkt für die App: entscheidet selbst, ob Backfill oder Incremental-Sync nötig ist. */
 export async function syncNow(onProgress) {
   const state = await getSyncState();
   return state.backfillComplete ? runIncrementalSync(onProgress) : runInitialBackfill(onProgress);

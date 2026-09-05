@@ -8,19 +8,19 @@
  * Authorization Code abfängt (z.B. über die Browser-History oder einen
  * bösartigen Redirect), diesen gegen ein Access Token eintauschen.
  *
- * Der Trick: Wir erzeugen VOR dem Redirect zu Fitbit ein zufälliges Geheimnis
- * ("code_verifier"), das nur in diesem Browser existiert. Wir schicken Fitbit
- * nur einen Hash davon ("code_challenge"). Fitbit merkt sich den Hash. Wenn
+ * Der Trick: Wir erzeugen VOR dem Redirect zu Google ein zufälliges Geheimnis
+ * ("code_verifier"), das nur in diesem Browser existiert. Wir schicken Google
+ * nur einen Hash davon ("code_challenge"). Google merkt sich den Hash. Wenn
  * wir später den Authorization Code gegen Tokens eintauschen, müssen wir den
- * ORIGINAL code_verifier mitschicken – Fitbit prüft, ob dessen Hash zum
+ * ORIGINAL code_verifier mitschicken – Google prüft, ob dessen Hash zum
  * vorher übermittelten code_challenge passt. Ein Angreifer, der nur den Code
  * abfängt, kennt den code_verifier nicht und kann ihn nicht eintauschen.
  *
  * Ablauf im Überblick:
  *   1. generateCodeVerifier()  -> zufälliger String, bleibt lokal (sessionStorage)
- *   2. generateCodeChallenge() -> SHA-256(verifier), base64url-kodiert, geht an Fitbit
- *   3. Redirect zu Fitbit mit code_challenge + code_challenge_method=S256
- *   4. Fitbit redirected zurück mit ?code=...
+ *   2. generateCodeChallenge() -> SHA-256(verifier), base64url-kodiert, geht an Google
+ *   3. Redirect zu Google mit code_challenge + code_challenge_method=S256
+ *   4. Google leitet zurück mit ?code=...
  *   5. Token-Exchange: POST /oauth2/token mit code + code_verifier (Klartext)
  */
 
@@ -64,7 +64,7 @@ export async function generateCodeChallenge(codeVerifier) {
 
 /**
  * Zufälliger "state"-Wert gegen CSRF: wir prüfen nach dem Redirect, ob der
- * state-Parameter, den Fitbit zurückschickt, exakt dem entspricht, den wir
+ * state-Parameter, den Google zurückschickt, exakt dem entspricht, den wir
  * vor dem Redirect selbst erzeugt und lokal gespeichert haben. Falls ein
  * Angreifer versucht, uns einen fremden Authorization Code unterzuschieben
  * (indem er uns einen präparierten Redirect-Link schickt), würde der

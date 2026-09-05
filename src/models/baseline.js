@@ -73,11 +73,13 @@ export function computeSleepConsistencyStdDevMinutes(dayRecords, endDateIso, win
 }
 
 /**
- * Liest die Uhrzeit direkt aus dem Fitbit-Zeitstempel ("2026-09-04T23:41:30.000").
- * Fitbit liefert lokale Gerätezeit OHNE Zeitzonen-Suffix – würde man das durch
- * `new Date(...)` schicken, interpretiert der Browser es als lokale Zeit und
- * eine spätere Umrechnung (z.B. getUTCHours) würde die Uhrzeit verschieben.
- * Für "wann bin ich eingeschlafen" wollen wir exakt die Uhr des Geräts.
+ * Liest die Uhrzeit direkt aus dem Zeitstempel ("2026-09-04T23:41:30").
+ *
+ * sync.js legt die Einschlafzeit bereits als LOKALE Uhrzeit ohne
+ * Zeitzonen-Kennung ab. Würde man diesen String durch `new Date(...)` und
+ * anschließend z.B. getUTCHours() schicken, verschöbe sich die Uhrzeit um den
+ * Zeitzonen-Versatz. Für "wann bin ich eingeschlafen?" zählt aber exakt die
+ * Uhr am Handgelenk, deshalb lesen wir die Stunden/Minuten direkt aus.
  */
 export function parseLocalClockMinutes(timestamp) {
   if (!timestamp) return null;
@@ -133,7 +135,7 @@ export function computeWeeklyActiveMinutes(dayRecords, endDateIso, windowDays = 
   return any ? total : null;
 }
 
-/** Anzahl Tage mit mindestens einem gespeicherten Fitbit-Messwert (Basis für den Confidence-Indikator). */
+/** Anzahl Tage mit mindestens einem gespeicherten Messwert (Basis für den Confidence-Indikator). */
 export function countDaysWithData(dayRecords) {
   return dayRecords.filter((r) =>
     [

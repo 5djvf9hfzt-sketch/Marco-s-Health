@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useAppState } from "../state/store.jsx";
-import { logout } from "../auth/fitbitAuth.js";
+import { logout } from "../auth/googleAuth.js";
 
 const DIET_LABELS = {
   1: "Viel Verarbeitetes, viel Zucker",
@@ -269,7 +269,7 @@ export default function Lifestyle() {
       <div className="section-label">Verbindung</div>
       <div className="card">
         <div className="kv-row">
-          <span className="muted">Fitbit</span>
+          <span className="muted">Google Health</span>
           <span className="value" style={{ color: "var(--recovery)" }}>Verbunden</span>
         </div>
         <div className="kv-row">
@@ -285,7 +285,7 @@ export default function Lifestyle() {
           style={{ marginTop: 14 }}
           onClick={() => {
             const confirmed = window.confirm(
-              "Fitbit-Verbindung trennen? Deine bereits geladenen Daten bleiben auf diesem Gerät erhalten."
+              "Google-Verbindung trennen? Deine bereits geladenen Daten bleiben auf diesem Gerät erhalten."
             );
             if (confirmed) {
               logout();
@@ -293,7 +293,7 @@ export default function Lifestyle() {
             }
           }}
         >
-          Fitbit-Verbindung trennen
+          Google-Verbindung trennen
         </button>
       </div>
     </div>

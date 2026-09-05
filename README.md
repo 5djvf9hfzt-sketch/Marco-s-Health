@@ -2,46 +2,34 @@
 
 Ein rein statisches Gesundheits-Dashboard (PWA): Whoop-artige **Recovery-,
 Strain- und Sleep-Scores** kombiniert mit einem Bevel-Health-artigen
-**biologischen Alter** – berechnet direkt im Browser aus deinen Fitbit-Daten.
+**biologischen Alter** – berechnet direkt im Browser aus deinen
+Google-Health-Daten (und damit aus deiner Fitbit-Uhr).
 
-- **Kein Backend, keine Datenbank, kein Server-Cron-Job.** Die einzige
-  Server-Komponente ist ein winziger, zustandsloser CORS-Relay (siehe unten,
-  Punkt "Warum ein Relay nötig ist") – er speichert nichts, führt keine Logik
-  aus, sondern leitet Requests 1:1 weiter.
+- **Kein Backend, keine Datenbank, kein Server, kein Cron-Job.** Die App ist
+  eine einzelne statische Seite. Google setzt sowohl beim OAuth-Login als auch
+  auf der Health API die nötigen CORS-Header, deshalb spricht der Browser beide
+  direkt an.
 - Alle deine Gesundheitsdaten bleiben ausschließlich in deinem Browser
-  (IndexedDB/localStorage).
+  (IndexedDB/localStorage) – sie werden nirgendwohin übertragen.
 - Läuft als PWA auf dem iPhone-Homescreen, offline-fähig für bereits
   geladene Daten.
 
 ---
 
-## ⚠️ Wichtiger Hinweis vorab: Warum ein CORS-Relay nötig ist
+## Warum Google und nicht Fitbit?
 
-Fitbits Web API sendet **keine CORS-Header** – weder der OAuth-Token-Endpunkt
-noch die Daten-Endpunkte. Ein Browser blockiert deshalb `fetch()`-Antworten
-von einer rein statischen Seite (wie GitHub Pages) an Fitbit. Das ist keine
-Fehlkonfiguration in diesem Projekt, sondern eine serverseitige Einschränkung
-von Fitbit, die clientseitig nicht lösbar ist.
+Die klassische **Fitbit Web API wird zum 30. September 2026 abgeschaltet** und
+durch die **Google Health API** (`health.googleapis.com/v4`) ersetzt. Deine
+Fitbit-Uhr liefert weiterhin Daten – sie fließen nach der Umstellung deines
+Fitbit-Kontos auf ein Google-Konto in die Google Health API. VitalSync setzt
+deshalb direkt auf der neuen API auf.
 
-Die Lösung: ein **einziges, ca. 60 Zeilen kleines, zustandsloses Skript**
-(`cors-relay/worker.js`), das du kostenlos auf Cloudflare Workers deployst.
-Es speichert nichts, hat keine Datenbank, keinen Cron-Job – es hängt bei
-jedem Request nur die fehlenden CORS-Header an und leitet 1:1 an
-`api.fitbit.com` weiter. Alle deine Daten (Tokens, Gesundheitswerte) fließen
-NUR durch, werden nirgendwo gespeichert.
+Angenehmer Nebeneffekt: Fitbit unterstützte kein CORS und hätte zwingend einen
+Proxy-Server gebraucht. Google unterstützt CORS – die App kommt komplett ohne
+Serverkomponente aus.
 
-## ⚠️ Wichtiger Hinweis: Fitbit Web API Sunset am 30. September 2026
-
-Fitbit/Google schalten die klassische Fitbit Web API zum **30. September
-2026** zugunsten der neuen Google Health API ab. Bestehende OAuth-Verbindungen
-migrieren nicht automatisch – Nutzer müssen sich nach der Umstellung über die
-neue API erneut verbinden. VitalSync ist aktuell gegen die klassische Fitbit
-Web API gebaut (passend zu den in der Aufgabenstellung geforderten Scopes).
-Nach der Abschaltung müssten `src/api/fitbitApi.js`, `src/auth/fitbitAuth.js`
-und `cors-relay/worker.js` auf die Google Health API (`health.googleapis.com`)
-umgestellt werden – die restliche App (Speicherschicht, Bio-Age-Modul,
-Scores, UI) bleibt davon unberührt, da sie nur mit bereits normalisierten
-Tagesdaten arbeitet.
+**Voraussetzung:** Dein Fitbit-Konto muss auf ein Google-Konto umgestellt sein,
+sonst liegen in der Google Health API keine Daten deiner Uhr.
 
 ---
 
@@ -78,134 +66,143 @@ im biologischen Alter.
 ```
 Browser (GitHub Pages, statisch)
   │
-  │  fetch() über den CORS-Relay
-  ▼
-Cloudflare Worker (cors-relay/worker.js)   ← einzige "Server"-Komponente, zustandslos
-  │
-  ▼
-Fitbit Web API (api.fitbit.com)
+  ├─── OAuth-Login ──────────► accounts.google.com  (Seiten-Redirect)
+  ├─── Token-Tausch ─────────► oauth2.googleapis.com  (fetch, CORS erlaubt)
+  └─── Gesundheitsdaten ─────► health.googleapis.com/v4  (fetch, CORS erlaubt)
+
+Kein eigener Server, keine Datenbank, kein Cron-Job.
 ```
 
-- `src/auth/` – PKCE-OAuth-Flow + Token-Refresh (ausführlich kommentiert)
-- `src/api/` – Fitbit-API-Client + Sync-Orchestrierung (90-Tage-Backfill, danach inkrementell)
+- `src/auth/` – PKCE-OAuth-Flow gegen Google + automatischer Token-Refresh
+  (ausführlich kommentiert)
+- `src/api/googleHealthApi.js` – Endpunkte, Filter-Syntax und Limits der
+  Google Health API v4
+- `src/api/sync.js` – 90-Tage-Backfill + inkrementeller Sync; die **einzige**
+  Datei, die das Antwortformat von Google kennt, und übersetzt es ins interne
+  Tagesformat
 - `src/storage/db.js` – IndexedDB-Speicherschicht
-- `src/models/biologicalAge.js` – **alle Gewichtungen/Schwellenwerte für das biologische Alter, zentral an einer Stelle**
-- `src/models/scores.js`, `baseline.js` – Recovery/Strain/Sleep-Scores relativ zur persönlichen Baseline
-- `src/screens/`, `src/components/` – UI (Onboarding, Home, Trends, Lifestyle, Insights)
-- `public/manifest.webmanifest`, `public/sw.js` – PWA/Offline-Fähigkeit
+- `src/models/biologicalAge.js` – **alle Gewichtungen/Schwellenwerte für das
+  biologische Alter, zentral an einer Stelle**
+- `src/models/scores.js`, `baseline.js` – Recovery/Strain/Sleep relativ zur
+  persönlichen Baseline
+- `src/screens/`, `src/components/` – Oberfläche
+- `optional-token-helper/` – wird im Normalfall **nicht** gebraucht (siehe
+  Troubleshooting)
 
 ---
 
-## (a) Fitbit Developer Account anlegen und App registrieren
+## (a) Google Cloud einrichten und OAuth-Client anlegen
 
-1. Gehe auf **https://dev.fitbit.com** und logge dich mit deinem normalen
-   Fitbit-Account ein (oder erstelle einen, falls du noch keinen hast).
-2. Klicke oben rechts auf deinen Namen → **"Manage" → "Register An App"**
-   (oder direkt dev.fitbit.com/apps/new).
-3. Fülle das Formular aus:
-   - **Application Name**: z.B. "VitalSync"
-   - **Description**: kurz, z.B. "Persönliches Gesundheits-Dashboard"
-   - **Application Website**: deine spätere GitHub-Pages-URL (kannst du
-     vorerst auch `https://github.com/DEIN-NAME/DEIN-REPO` eintragen)
-   - **Organization** / **Organization Website**: kannst du mit deinem Namen
-     bzw. derselben URL ausfüllen
-   - **Terms of Service URL** / **Privacy Policy URL**: da dies eine rein
-     private App ist, kannst du hier ebenfalls deine GitHub-Repo-URL eintragen
-   - **OAuth 2.0 Application Type**: **"Client"** (NICHT "Server"! Nur
-     "Client"-Apps unterstützen PKCE ohne Client-Secret)
-   - **Redirect URL**: Das ist die wichtigste Einstellung. Sie muss **exakt**
-     der URL entsprechen, unter der deine App später läuft, z.B.:
-     `https://DEIN-GITHUB-NAME.github.io/DEIN-REPO-NAME/`
-     (mit abschließendem Schrägstrich!). Du kannst das Feld nach dem
-     GitHub-Pages-Setup (Schritt b) jederzeit in den App-Einstellungen
-     nachträglich anpassen.
-   - **Default Access Type**: "Read-Only" reicht aus.
-4. Nach dem Speichern siehst du deine **OAuth 2.0 Client ID** (KEIN
-   Client-Secret nötig – das ist bei "Client"-Apps mit PKCE so vorgesehen).
-   Trage diese ID später in `src/config.js` (`FITBIT_CONFIG.clientId`) ein.
+Das ist der aufwendigste Teil, dauert einmalig etwa 15 Minuten. Du brauchst nur
+ein normales Google-Konto, keine Kreditkarte und keine Zahlungsdaten.
 
-Benötigte Scopes (bereits fest in `src/config.js` hinterlegt, keine
-Änderung nötig): `heartrate`, `sleep`, `activity`, `profile`,
-`oxygen_saturation`, `respiratory_rate`, `cardio_fitness`.
+### 1. Projekt anlegen
+
+1. Öffne **https://console.cloud.google.com**.
+2. Oben in der blauen Leiste auf die Projektauswahl klicken → **"Neues Projekt"**.
+3. Name z.B. `vitalsync`, dann **"Erstellen"**. Warte, bis das Projekt oben
+   ausgewählt ist.
+
+### 2. Google Health API aktivieren
+
+1. Links im Menü **"APIs & Dienste" → "Bibliothek"**.
+2. Nach **"Google Health API"** suchen, anklicken, **"Aktivieren"**.
+
+### 3. Zustimmungsbildschirm konfigurieren
+
+1. **"APIs & Dienste" → "OAuth-Zustimmungsbildschirm"**.
+2. Nutzertyp **"Extern"** wählen (das ist auch für den reinen Eigengebrauch der
+   richtige Typ) und die Pflichtfelder ausfüllen: App-Name (z.B. VitalSync),
+   deine E-Mail als Support-Adresse und als Entwicklerkontakt.
+3. Bei **"Testnutzer"** deine eigene Google-Adresse hinzufügen – also das Konto,
+   mit dem deine Fitbit-Daten verknüpft sind.
+4. Die App **im Status "Test" belassen**. Für den privaten Gebrauch ist das der
+   einfachste Weg (siehe Kasten unten).
+
+> **Wichtig – die 7-Tage-Regel:** Solange die App im Status "Test" steht,
+> laufen die von Google ausgestellten Refresh-Tokens nach **7 Tagen** ab. Du
+> musst VitalSync dann einmal antippen und neu verbinden – deine gespeicherten
+> Daten und dein Verlauf bleiben dabei erhalten. Wer das vermeiden will, müsste
+> die App auf "Produktion" veröffentlichen; weil Gesundheitsdaten von Google als
+> sensibel eingestuft werden, ist dafür ein Überprüfungsverfahren nötig, das
+> für eine reine Privat-App unverhältnismäßig ist.
+
+### 4. OAuth-Client erstellen
+
+1. **"APIs & Dienste" → "Anmeldedaten" → "Anmeldedaten erstellen" →
+   "OAuth-Client-ID"**.
+2. Anwendungstyp: **"Webanwendung"**.
+3. Unter **"Autorisierte JavaScript-Quellen"** eintragen:
+   ```
+   https://DEIN-GITHUB-NAME.github.io
+   http://localhost:5173
+   ```
+4. Unter **"Autorisierte Weiterleitungs-URIs"** eintragen – **exakt**, inklusive
+   Schrägstrich am Ende:
+   ```
+   https://DEIN-GITHUB-NAME.github.io/DEIN-REPO-NAME/
+   http://localhost:5173/
+   ```
+5. **"Erstellen"**. Google zeigt dir jetzt die **Client-ID** (endet auf
+   `.apps.googleusercontent.com`). Die brauchst du gleich.
+
+Das ebenfalls angezeigte **Client-Secret brauchst du nicht** – der PKCE-Flow
+kommt ohne aus. Siehe Troubleshooting, falls Google es doch verlangt.
+
+### 5. Client-ID eintragen
+
+In `src/config.js` die Zeile `clientId:` mit deiner Client-ID füllen. Sie ist
+kein Geheimnis: Bei einem PKCE-Flow steht die Client-ID immer im Browser-Code.
 
 ---
 
-## (b) GitHub Account, Repo, Code hochladen, GitHub Pages aktivieren
+## (b) GitHub-Repo und GitHub Pages
 
-### (b.1) CORS-Relay auf Cloudflare Workers deployen
+### (b.1) Repo erstellen und Code hochladen
 
-1. Erstelle kostenlos einen Account auf **https://dash.cloudflare.com/sign-up**.
-2. Im Dashboard: **Workers & Pages → Create → Create Worker**.
-3. Vergib einen Namen (z.B. `vitalsync-proxy`) und klicke **Deploy**
-   (zunächst mit dem Standard-"Hello World"-Code – das ändern wir gleich).
-4. Klicke danach auf **"Edit Code"** (Quick Edit) und ersetze den kompletten
-   Inhalt durch den Code aus `cors-relay/worker.js` in diesem Repository.
-5. Trage in der `ALLOWED_ORIGINS`-Liste im Worker-Code deine spätere
-   GitHub-Pages-URL ein, z.B. `"https://DEIN-GITHUB-NAME.github.io"`
-   (**ohne** Pfad/Repo-Namen, **ohne** abschließenden Schrägstrich – das ist
-   die "Origin", nicht die volle URL).
-6. Klicke **Deploy**. Die angezeigte URL (z.B.
-   `https://vitalsync-proxy.DEIN-NAME.workers.dev`) ist dein Relay-Endpunkt –
-   trage sie in `src/config.js` unter `FITBIT_CONFIG.relayUrl` ein.
-
-### (b.2) Repo erstellen und Code hochladen
-
-1. Erstelle einen kostenlosen Account auf **https://github.com/signup**,
-   falls noch nicht vorhanden.
-2. Klicke oben rechts auf **"+" → "New repository"**. Name frei wählbar
-   (z.B. `vitalsync`), Sichtbarkeit "Public" (nötig für kostenloses GitHub
-   Pages), **ohne** README/​.gitignore initialisieren (dieses Repo bringt
-   bereits alles mit).
-3. Trage in `src/config.js` deine **Fitbit Client ID** (aus Schritt a) und
-   deine **Relay-URL** (aus Schritt b.1) ein.
-4. Lade den kompletten Projektordner in dein neues Repository hoch, z.B.
-   lokal per Git:
+1. Kostenloses Konto auf **https://github.com/signup**, falls noch nicht
+   vorhanden.
+2. Oben rechts **"+" → "New repository"**. Name frei wählbar, Sichtbarkeit
+   **"Public"** (nötig für kostenloses GitHub Pages), **ohne** README
+   initialisieren.
+3. Code hochladen, z.B. lokal per Git:
    ```bash
    git init
    git add .
    git commit -m "Initial commit"
    git branch -M main
-   git remote add origin https://github.com/DEIN-GITHUB-NAME/DEIN-REPO-NAME.git
+   git remote add origin https://github.com/DEIN-NAME/DEIN-REPO.git
    git push -u origin main
    ```
-   (Alternativ: Dateien direkt über die GitHub-Weboberfläche hochladen.)
 
-### (b.3) GitHub Pages aktivieren
+### (b.2) GitHub Pages aktivieren
 
 1. Im Repository: **Settings → Pages**.
-2. Unter "Build and deployment" → **Source: "GitHub Actions"** auswählen
-   (NICHT "Deploy from a branch" – dieses Projekt bringt bereits einen
-   fertigen Workflow unter `.github/workflows/deploy.yml` mit, der bei jedem
-   Push automatisch baut und deployt).
+2. Unter "Build and deployment" → **Source: "GitHub Actions"** (NICHT "Deploy
+   from a branch"). Das Projekt bringt den fertigen Workflow
+   `.github/workflows/deploy.yml` mit.
 3. Der Workflow startet bei jedem Push auf einen beliebigen Branch und lässt
-   sich zusätzlich manuell starten: Tab **"Actions"** → links den Workflow
-   "Deploy VitalSync to GitHub Pages" wählen → Button **"Run workflow"**.
-   Nach ein bis zwei Minuten ist deine App erreichbar unter
-   `https://DEIN-GITHUB-NAME.github.io/DEIN-REPO-NAME/`.
-4. **Jetzt die Fitbit-App-Einstellungen (Schritt a) aktualisieren:** trage
-   diese exakte URL (mit abschließendem `/`) als **Redirect URL** in deiner
-   Fitbit-App-Konfiguration auf dev.fitbit.com ein.
+   sich zusätzlich manuell starten: Tab **"Actions"** → Workflow
+   "Deploy VitalSync to GitHub Pages" → **"Run workflow"**.
+4. Nach ein bis zwei Minuten ist die App erreichbar unter
+   `https://DEIN-NAME.github.io/DEIN-REPO/`. Prüfe, dass diese Adresse exakt
+   der Weiterleitungs-URI aus Schritt (a.4) entspricht.
 
 ---
 
 ## (c) VitalSync auf dem iPhone installieren
 
-1. Öffne die GitHub-Pages-URL deiner App in **Safari** auf dem iPhone
-   (wichtig: Safari, nicht Chrome – nur Safari unterstützt "Zum
-   Home-Bildschirm hinzufügen" mit vollem PWA-Support auf iOS).
-2. Tippe auf das **Teilen-Symbol** (Quadrat mit Pfeil nach oben) in der
-   unteren Menüleiste.
-3. Wähle **"Zum Home-Bildschirm"**.
-4. Vergib einen Namen (Vorschlag: "VitalSync") und tippe auf **"Hinzufügen"**.
-5. Öffne VitalSync ab jetzt über das neue Icon auf dem Home-Bildschirm – die
-   App startet dann im Vollbildmodus (ohne Safari-Adressleiste) und bleibt
-   auch offline nutzbar (mit den zuletzt synchronisierten Daten).
-6. Beim ersten Öffnen: "Mit Fitbit verbinden" antippen, im folgenden
-   Fitbit-Login-Dialog zustimmen, Profil + Lifestyle-Fragebogen ausfüllen.
-   Der initiale 90-Tage-Datenabruf läuft im Hintergrund (kleiner
-   Fortschrittshinweis auf dem letzten Onboarding-Schritt).
-
----
+1. Die GitHub-Pages-Adresse in **Safari** auf dem iPhone öffnen (wichtig:
+   Safari, nicht Chrome – nur Safari unterstützt auf iOS die vollwertige
+   Installation).
+2. Auf das **Teilen-Symbol** tippen (Quadrat mit Pfeil nach oben).
+3. **"Zum Home-Bildschirm"** wählen, Namen bestätigen, **"Hinzufügen"**.
+4. VitalSync ab jetzt über das neue Icon starten – die App läuft dann im
+   Vollbild ohne Safari-Leiste und bleibt mit den zuletzt geladenen Daten auch
+   offline nutzbar.
+5. Beim ersten Öffnen: **"Mit Google verbinden"**, den Zugriff auf Aktivität,
+   Gesundheitswerte und Schlaf bestätigen, dann Profil und Lifestyle-Fragebogen
+   ausfüllen. Die 90 Tage Historie laden im Hintergrund.
 
 ## Lokal entwickeln / testen
 
@@ -216,25 +213,35 @@ npm run build     # Produktions-Build nach dist/
 npm run preview   # Baut nicht neu, dient nur zum lokalen Testen von dist/
 ```
 
-Für lokale Entwicklung ist `http://localhost:5173` bereits in
-`cors-relay/worker.js` (`ALLOWED_ORIGINS`) hinterlegt und muss beim
-Cloudflare-Worker-Deploy nicht entfernt werden.
+Damit der Login lokal funktioniert, müssen `http://localhost:5173` (als
+JavaScript-Quelle) und `http://localhost:5173/` (als Weiterleitungs-URI) in
+deinem Google-OAuth-Client eingetragen sein – siehe Schritt (a.4).
 
 ## Troubleshooting
 
-- **"Origin nicht erlaubt" / CORS-Fehler im Browser**: Prüfe, ob deine
-  GitHub-Pages-Origin exakt (inkl. `https://`, ohne Pfad) in
-  `ALLOWED_ORIGINS` im deployten Worker-Code steht, und dass du den Worker
-  nach einer Änderung erneut deployt hast.
-- **Fitbit zeigt "Invalid redirect_uri"**: Die Redirect-URL in den
-  Fitbit-App-Einstellungen muss exakt (inkl. abschließendem `/`) der
-  tatsächlichen GitHub-Pages-URL entsprechen.
-- **Token-Refresh schlägt dauerhaft fehl**: Der Nutzer hat den Zugriff
-  vermutlich in seinem Fitbit-Account widerrufen – einfach über "Mit Fitbit
-  verbinden" erneut anmelden.
-- **Manche Kacheln zeigen "Keine Daten"**: Manche Fitbit-Geräte liefern
-  bestimmte Metriken nicht (z.B. Cardio Fitness Score, SpO2). Das betrifft
-  dann gezielt nur diesen einen Faktor, nicht die restliche App.
+- **Google zeigt "Zugriff blockiert: Fehler bei der Autorisierung" /
+  `redirect_uri_mismatch`**: Die Weiterleitungs-URI im OAuth-Client muss exakt
+  der aufgerufenen Adresse entsprechen, inklusive Schrägstrich am Ende und mit
+  korrekter Groß-/Kleinschreibung des Repo-Namens.
+- **"Diese App ist nicht überprüft"**: Erwartetes Verhalten im Test-Status.
+  Über "Erweitert" → "Weiter zu VitalSync" bestätigen. Voraussetzung ist, dass
+  dein Konto unter "Testnutzer" eingetragen ist.
+- **Nach etwa einer Woche kommt "bitte erneut verbinden"**: Das ist die
+  7-Tage-Regel für Apps im Test-Status (siehe Kasten in Schritt a.3). Einmal
+  neu verbinden genügt, gespeicherte Daten bleiben erhalten.
+- **Token-Tausch scheitert mit "client_secret is missing"**: Dann verlangt
+  Google für deinen Client doch ein Secret. Deploye in dem Fall den
+  Mini-Worker aus `optional-token-helper/` (Anleitung als Kommentar in der
+  Datei), hinterlege das Secret dort als verschlüsselte Variable und trage die
+  Worker-Adresse in `src/config.js` als `tokenRelayUrl` ein. Das Secret
+  gehört **nicht** in den Browser-Code.
+- **Manche Kacheln zeigen "Keine Daten"**: Nicht jedes Gerät liefert jede
+  Metrik (z.B. VO₂max oder SpO₂). Das betrifft dann gezielt nur diesen einen
+  Wert – der Rest der App rechnet normal weiter, und fehlende Tage werden
+  bewusst nicht als Null gewertet.
+- **Gar keine Daten trotz erfolgreichem Login**: Prüfe, ob dein Fitbit-Konto
+  bereits auf ein Google-Konto umgestellt ist und ob du dich mit genau diesem
+  Konto angemeldet hast.
 
 ## Wichtiger Hinweis
 
