@@ -1,8 +1,12 @@
 name: Deploy VitalSync to GitHub Pages
 
 on:
+  # Läuft bei jedem Push auf JEDEN Branch. Grund: Dieses Repository nutzt
+  # nicht zwingend "main" als Standard-Branch – mit einer festen Branch-Liste
+  # würde der Deploy sonst stillschweigend nie starten.
   push:
-    branches: [main]
+    branches: ["**"]
+  # Zusätzlich manuell startbar über den Tab "Actions" -> "Run workflow".
   workflow_dispatch:
 
 permissions:
@@ -30,10 +34,13 @@ jobs:
       # VITE_BASE_PATH wird automatisch aus dem Repo-Namen gebildet, damit
       # die App unabhängig davon, wie das Repo heißt, unter
       # https://<user>.github.io/<repo>/ korrekt funktioniert.
+      # GITHUB_REPOSITORY hat die Form "besitzer/repo"; "${VAR#*/}" schneidet
+      # alles bis zum ersten "/" ab und lässt den reinen Repo-Namen übrig.
       - name: Build
-        run: npm run build
-        env:
-          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+        run: |
+          export VITE_BASE_PATH="/${GITHUB_REPOSITORY#*/}/"
+          echo "Base-Pfad für den Build: $VITE_BASE_PATH"
+          npm run build
 
       - uses: actions/configure-pages@v5
 

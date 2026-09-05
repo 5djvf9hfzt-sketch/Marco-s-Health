@@ -176,10 +176,12 @@ Benötigte Scopes (bereits fest in `src/config.js` hinterlegt, keine
 2. Unter "Build and deployment" → **Source: "GitHub Actions"** auswählen
    (NICHT "Deploy from a branch" – dieses Projekt bringt bereits einen
    fertigen Workflow unter `.github/workflows/deploy.yml` mit, der bei jedem
-   Push auf `main` automatisch baut und deployt).
-3. Nach dem nächsten Push auf `main` läuft der Workflow automatisch (sichtbar
-   unter dem Tab **"Actions"**). Nach ein bis zwei Minuten ist deine App
-   erreichbar unter `https://DEIN-GITHUB-NAME.github.io/DEIN-REPO-NAME/`.
+   Push automatisch baut und deployt).
+3. Der Workflow startet bei jedem Push auf einen beliebigen Branch und lässt
+   sich zusätzlich manuell starten: Tab **"Actions"** → links den Workflow
+   "Deploy VitalSync to GitHub Pages" wählen → Button **"Run workflow"**.
+   Nach ein bis zwei Minuten ist deine App erreichbar unter
+   `https://DEIN-GITHUB-NAME.github.io/DEIN-REPO-NAME/`.
 4. **Jetzt die Fitbit-App-Einstellungen (Schritt a) aktualisieren:** trage
    diese exakte URL (mit abschließendem `/`) als **Redirect URL** in deiner
    Fitbit-App-Konfiguration auf dev.fitbit.com ein.
