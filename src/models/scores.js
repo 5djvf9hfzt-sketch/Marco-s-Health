@@ -37,26 +37,37 @@ export function computeRecoveryScore(dayRecords, targetDateIso) {
     endDateIso: targetDateIso,
   });
 
-  const hrvZ = zScore(today.hrv, hrvBaseline);
+  const sleepScoreResult = computeSleepScore(dayRecords, targetDateIso);
+
+  const hrvComponent = Number.isFinite(today.hrv) ? zScoreToScale(zScore(today.hrv, hrvBaseline)) : null;
   // Niedrigerer Ruhepuls als Baseline ist GUT -> Vorzeichen umdrehen, damit
   // ein negativer RHR-Z-Score (Puls niedriger als üblich) den Score erhöht.
-  const rhrZ = -zScore(today.restingHeartRate, rhrBaseline);
+  const rhrComponent = Number.isFinite(today.restingHeartRate)
+    ? zScoreToScale(-zScore(today.restingHeartRate, rhrBaseline))
+    : null;
+  const sleepComponent = sleepScoreResult?.score ?? null;
 
-  const sleepScoreResult = computeSleepScore(dayRecords, targetDateIso);
-  const sleepComponent = sleepScoreResult?.score ?? 50; // neutral, falls keine Schlafdaten vorhanden
+  // Nur tatsächlich vorhandene Komponenten fließen ein, die Gewichte werden
+  // darüber normalisiert. Ohne HRV UND ohne Ruhepuls gibt es keinen
+  // belastbaren Recovery-Wert – dann lieber "keine Daten" zeigen als eine
+  // Zahl, die in Wahrheit nur den Schlaf oder gar nichts abbildet.
+  if (hrvComponent == null && rhrComponent == null) return null;
 
-  const hrvComponent = zScoreToScale(hrvZ);
-  const rhrComponent = zScoreToScale(rhrZ);
+  const parts = [
+    [hrvComponent, 0.5],
+    [rhrComponent, 0.3],
+    [sleepComponent, 0.2],
+  ].filter(([value]) => value != null);
 
-  const score = Math.round(0.5 * hrvComponent + 0.3 * rhrComponent + 0.2 * sleepComponent);
-  const clamped = clamp(score, 0, 100);
+  const totalWeight = parts.reduce((sum, [, weight]) => sum + weight, 0);
+  const score = clamp(Math.round(parts.reduce((sum, [value, weight]) => sum + value * weight, 0) / totalWeight), 0, 100);
 
-  const zone = clamped >= 67 ? "green" : clamped >= 34 ? "yellow" : "red";
+  const zone = score >= 67 ? "green" : score >= 34 ? "yellow" : "red";
 
   return {
-    score: clamped,
+    score,
     zone,
-    hasEnoughBaseline: hrvBaseline.sampleSize >= 3 && rhrBaseline.sampleSize >= 3,
+    hasEnoughBaseline: hrvBaseline.sampleSize >= 3 || rhrBaseline.sampleSize >= 3,
     components: { hrvComponent, rhrComponent, sleepComponent },
   };
 }
@@ -72,8 +83,15 @@ export function computeStrainScore(dayRecords, targetDateIso) {
   // Fat-Burn-Zone (leichte Belastung) zählt einfach, Cardio+Peak (hohe
   // Belastung) dreifach. Falls die Uhr keine Zonenminuten liefert, weichen
   // wir auf die gröberen "fairly/very active minutes" aus.
-  const lightLoad = today.fatBurnZoneMinutes ?? today.fairlyActiveMinutes ?? 0;
-  const hardLoad = today.moderateVigorousZoneMinutes ?? today.veryActiveMinutes ?? 0;
+  const light = today.fatBurnZoneMinutes ?? today.fairlyActiveMinutes;
+  const hard = today.moderateVigorousZoneMinutes ?? today.veryActiveMinutes;
+
+  // Ohne jede Belastungsangabe ist "0 Strain" eine Falschaussage – dann gibt
+  // es schlicht keinen Wert. Sind Werte vorhanden und 0, ist 0 dagegen korrekt.
+  if (!Number.isFinite(light) && !Number.isFinite(hard)) return null;
+
+  const lightLoad = Number.isFinite(light) ? light : 0;
+  const hardLoad = Number.isFinite(hard) ? hard : 0;
   const weightedLoad = lightLoad * 1 + hardLoad * 3;
 
   // Logarithmische Sättigungskurve: viele Minuten leichter Aktivität heben
@@ -112,6 +130,39 @@ function stageBalanceScore(stages) {
 function consistencyScoreFromStdDev(stdDevMinutes) {
   if (stdDevMinutes == null) return null;
   return clamp(((180 - stdDevMinutes) / 180) * 100, 0, 100);
+}
+
+/**
+ * Empfohlener Schlafbedarf für Erwachsene (Orientierung: die gängige
+ * Empfehlung von 7–9 Stunden pro Nacht, hier als Mittelwert 8h). Bewusst ein
+ * fester Referenzwert statt des persönlichen Durchschnitts: wer chronisch zu
+ * wenig schläft, hätte sonst automatisch einen "gedeckten" Bedarf.
+ */
+export const SLEEP_NEED_MINUTES = 480;
+
+/**
+ * Aufsummiertes Schlafdefizit der letzten `windowDays` Tage in Minuten.
+ * Nächte ohne Daten werden übersprungen (kein fiktives Defizit für Tage,
+ * an denen die Uhr nicht getragen wurde), Überschuss verrechnet sich nicht
+ * mit dem Defizit anderer Nächte.
+ */
+export function computeSleepDebtMinutes(dayRecords, endDateIso, windowDays = 7) {
+  const end = new Date(endDateIso + "T00:00:00Z");
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - windowDays + 1);
+  const startIso = start.toISOString().slice(0, 10);
+
+  let debt = 0;
+  let nights = 0;
+  dayRecords
+    .filter((r) => r.date >= startIso && r.date <= endDateIso)
+    .forEach((r) => {
+      if (!Number.isFinite(r.sleepDurationMin)) return;
+      nights += 1;
+      debt += Math.max(0, SLEEP_NEED_MINUTES - r.sleepDurationMin);
+    });
+
+  return nights > 0 ? { debtMinutes: Math.round(debt), nights } : null;
 }
 
 export function computeSleepScore(dayRecords, targetDateIso) {

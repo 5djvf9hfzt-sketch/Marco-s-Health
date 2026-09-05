@@ -70,7 +70,7 @@ export const BIOLOGICAL_AGE_CONFIG = {
           ],
         },
         hrv: {
-          label: "Herzratenvariabilität (HRV, RMSSD)",
+          label: "HRV (RMSSD)",
           unit: "ms",
           // Höhere HRV = besser (autonomes Nervensystem, Erholungsfähigkeit).
           breakpoints: [
@@ -84,7 +84,7 @@ export const BIOLOGICAL_AGE_CONFIG = {
           ],
         },
         cardioFitness: {
-          label: "Cardio Fitness Score (VO2max-Schätzung)",
+          label: "Cardio Fitness (VO₂max)",
           unit: "ml/kg/min",
           // Hinweis: VO2max ist stark alters- und geschlechtsabhängig zu
           // interpretieren. Diese Breakpoints sind ein vereinfachter,
@@ -133,8 +133,9 @@ export const BIOLOGICAL_AGE_CONFIG = {
           ],
         },
         consistency: {
-          label: "Schlaf-Konsistenz (7-Tage)",
-          unit: "Minuten Standardabweichung der Einschlafzeit",
+          label: "Schlaf-Konsistenz",
+          // Standardabweichung der Einschlafzeit über 7 Tage, in Minuten.
+          unit: "min Schwankung",
           // Niedrige Standardabweichung = regelmäßiger Rhythmus = besser.
           breakpoints: [
             { value: 0, years: -1 },
@@ -151,7 +152,7 @@ export const BIOLOGICAL_AGE_CONFIG = {
       label: "Aktivität",
       factors: {
         activeMinutes: {
-          label: "Moderate/intensive Aktivität",
+          label: "Aktive Zonenminuten",
           unit: "min/Woche",
           // Orientiert an der WHO-Empfehlung von 150min moderater bzw.
           // 75min intensiver Aktivität pro Woche als Referenzpunkt "0".
@@ -164,8 +165,8 @@ export const BIOLOGICAL_AGE_CONFIG = {
           ],
         },
         steps: {
-          label: "Tägliche Schritte",
-          unit: "Schritte/Tag",
+          label: "Schritte",
+          unit: "Ø/Tag",
           // Kleinerer Zusatzfaktor neben activeMinutes (Vermeidung von
           // Doppelgewichtung reiner Alltagsbewegung vs. Trainingsintensität).
           breakpoints: [
@@ -183,8 +184,8 @@ export const BIOLOGICAL_AGE_CONFIG = {
       label: "Atmung / Sauerstoff",
       factors: {
         spo2: {
-          label: "Sauerstoffsättigung (SpO2, Schlaf-Ø)",
-          unit: "%",
+          label: "Sauerstoffsättigung",
+          unit: "% SpO₂",
           breakpoints: [
             { value: 88, years: 3 },
             { value: 92, years: 1.5 },
@@ -193,7 +194,7 @@ export const BIOLOGICAL_AGE_CONFIG = {
           ],
         },
         breathingRate: {
-          label: "Atemfrequenz (Schlaf-Ø)",
+          label: "Atemfrequenz",
           unit: "Atemzüge/min",
           breakpoints: [
             { value: 12, years: -0.5 },
@@ -201,6 +202,30 @@ export const BIOLOGICAL_AGE_CONFIG = {
             { value: 18, years: 0.5 },
             { value: 22, years: 1.5 },
             { value: 26, years: 3 },
+          ],
+        },
+      },
+    },
+
+    body: {
+      label: "Körper",
+      factors: {
+        bmi: {
+          label: "Body-Mass-Index",
+          unit: "kg/m²",
+          // J-förmiger Verlauf entsprechend der WHO-BMI-Kategorien: sowohl
+          // deutliches Untergewicht als auch Adipositas sind mit erhöhter
+          // Gesamtmortalität assoziiert, das Minimum liegt grob bei BMI 22.
+          // Wichtige Einschränkung: BMI unterscheidet nicht zwischen Muskel-
+          // und Fettmasse – bei sehr muskulösen Menschen überschätzt er das Risiko.
+          breakpoints: [
+            { value: 16, years: 3 },
+            { value: 18.5, years: 0.5 },
+            { value: 22, years: 0 },
+            { value: 25, years: 0.5 },
+            { value: 30, years: 2 },
+            { value: 35, years: 4 },
+            { value: 40, years: 6 },
           ],
         },
       },
@@ -214,7 +239,7 @@ export const BIOLOGICAL_AGE_CONFIG = {
         // "aktuell", zusätzlich von Zigaretten/Tag abhängt.
         smoking: {
           label: "Rauchen",
-          unit: "Status",
+          unit: "",
           neverYears: 0,
           formerYears: 1.5,
           // Zigaretten/Tag -> Jahres-Malus bei aktuellem Rauchen.
@@ -229,7 +254,7 @@ export const BIOLOGICAL_AGE_CONFIG = {
         },
         alcohol: {
           label: "Alkohol",
-          unit: "Einheiten/Woche",
+          unit: "Einheiten/Wo.",
           breakpoints: [
             { value: 0, years: 0 },
             { value: 7, years: 0.5 },
@@ -241,7 +266,7 @@ export const BIOLOGICAL_AGE_CONFIG = {
         },
         diet: {
           label: "Ernährungsqualität",
-          unit: "Score 1 (schlecht) – 5 (sehr gut)",
+          unit: "von 5",
           breakpoints: [
             { value: 1, years: 3 },
             { value: 2, years: 1.5 },
@@ -251,8 +276,8 @@ export const BIOLOGICAL_AGE_CONFIG = {
           ],
         },
         stress: {
-          label: "Subjektives Stresslevel",
-          unit: "Score 1 (niedrig) – 5 (hoch)",
+          label: "Stresslevel",
+          unit: "von 5",
           breakpoints: [
             { value: 1, years: -1 },
             { value: 2, years: -0.3 },
@@ -318,6 +343,7 @@ function computeSmokingYears(smokingConfig, lifestyle) {
  * @param {number} [input.avgSteps]
  * @param {number} [input.avgSpo2]
  * @param {number} [input.avgBreathingRate]
+ * @param {number} [input.bmi] Aus Gewicht/Größe des Profils berechnet.
  * @param {object} [input.lifestyle] { smokingStatus, cigarettesPerDay, alcoholUnitsPerWeek, dietScore, stressLevel }
  * @param {number} input.daysOfData Anzahl Tage mit mind. einem Fitbit-Messwert (für Confidence).
  *
@@ -325,138 +351,67 @@ function computeSmokingYears(smokingConfig, lifestyle) {
  *   biologicalAge: number,
  *   deltaYears: number,
  *   confidence: "low"|"medium"|"high",
- *   breakdown: Array<{ categoryKey: string, categoryLabel: string, factorKey: string, label: string, years: number|null, inputValue: number|string|null }>
+ *   breakdown: Array<{ categoryKey: string, categoryLabel: string, factorKey: string, label: string, unit: string, years: number|null, inputValue: number|string|null }>
  * }}
  */
 export function computeBiologicalAge(input) {
   const cfg = BIOLOGICAL_AGE_CONFIG;
-  const breakdown = [];
 
-  const addFactor = (categoryKey, categoryLabel, factorKey, factorLabel, years, inputValue) => {
-    breakdown.push({ categoryKey, categoryLabel, factorKey, label: factorLabel, years, inputValue });
+  // Zuordnung "welcher Messwert gehört zu welchem Faktor der Konfiguration".
+  // Nur diese Tabelle muss ergänzt werden, wenn oben ein neuer Faktor
+  // dazukommt – die Schleife darunter bleibt unverändert.
+  const valuesByFactor = {
+    cardiovascular: {
+      restingHeartRate: input.avgRestingHeartRate,
+      hrv: input.avgHrv,
+      cardioFitness: input.avgCardioFitness,
+    },
+    sleep: {
+      duration: input.avgSleepDurationHours,
+      efficiency: input.avgSleepEfficiency,
+      consistency: input.sleepConsistencyStdDevMinutes,
+    },
+    activity: {
+      activeMinutes: input.weeklyActiveMinutes,
+      steps: input.avgSteps,
+    },
+    respiratory: {
+      spo2: input.avgSpo2,
+      breathingRate: input.avgBreathingRate,
+    },
+    body: {
+      bmi: input.bmi,
+    },
+    lifestyle: {
+      smoking: input.lifestyle?.smokingStatus,
+      alcohol: input.lifestyle?.alcoholUnitsPerWeek,
+      diet: input.lifestyle?.dietScore,
+      stress: input.lifestyle?.stressLevel,
+    },
   };
 
-  const cardio = cfg.categories.cardiovascular.factors;
-  addFactor(
-    "cardiovascular",
-    cfg.categories.cardiovascular.label,
-    "restingHeartRate",
-    cardio.restingHeartRate.label,
-    interpolateYears(input.avgRestingHeartRate, cardio.restingHeartRate.breakpoints),
-    input.avgRestingHeartRate ?? null
-  );
-  addFactor(
-    "cardiovascular",
-    cfg.categories.cardiovascular.label,
-    "hrv",
-    cardio.hrv.label,
-    interpolateYears(input.avgHrv, cardio.hrv.breakpoints),
-    input.avgHrv ?? null
-  );
-  addFactor(
-    "cardiovascular",
-    cfg.categories.cardiovascular.label,
-    "cardioFitness",
-    cardio.cardioFitness.label,
-    interpolateYears(input.avgCardioFitness, cardio.cardioFitness.breakpoints),
-    input.avgCardioFitness ?? null
-  );
+  const breakdown = [];
+  Object.entries(cfg.categories).forEach(([categoryKey, category]) => {
+    Object.entries(category.factors).forEach(([factorKey, factorConfig]) => {
+      const value = valuesByFactor[categoryKey]?.[factorKey];
+      // Rauchen ist der einzige kategoriale Faktor (nie/früher/aktuell) und
+      // hat deshalb eine eigene Auswertung statt einer Interpolation.
+      const years =
+        factorKey === "smoking"
+          ? computeSmokingYears(factorConfig, input.lifestyle)
+          : interpolateYears(value, factorConfig.breakpoints);
 
-  const sleep = cfg.categories.sleep.factors;
-  addFactor(
-    "sleep",
-    cfg.categories.sleep.label,
-    "duration",
-    sleep.duration.label,
-    interpolateYears(input.avgSleepDurationHours, sleep.duration.breakpoints),
-    input.avgSleepDurationHours ?? null
-  );
-  addFactor(
-    "sleep",
-    cfg.categories.sleep.label,
-    "efficiency",
-    sleep.efficiency.label,
-    interpolateYears(input.avgSleepEfficiency, sleep.efficiency.breakpoints),
-    input.avgSleepEfficiency ?? null
-  );
-  addFactor(
-    "sleep",
-    cfg.categories.sleep.label,
-    "consistency",
-    sleep.consistency.label,
-    interpolateYears(input.sleepConsistencyStdDevMinutes, sleep.consistency.breakpoints),
-    input.sleepConsistencyStdDevMinutes ?? null
-  );
-
-  const activity = cfg.categories.activity.factors;
-  addFactor(
-    "activity",
-    cfg.categories.activity.label,
-    "activeMinutes",
-    activity.activeMinutes.label,
-    interpolateYears(input.weeklyActiveMinutes, activity.activeMinutes.breakpoints),
-    input.weeklyActiveMinutes ?? null
-  );
-  addFactor(
-    "activity",
-    cfg.categories.activity.label,
-    "steps",
-    activity.steps.label,
-    interpolateYears(input.avgSteps, activity.steps.breakpoints),
-    input.avgSteps ?? null
-  );
-
-  const respiratory = cfg.categories.respiratory.factors;
-  addFactor(
-    "respiratory",
-    cfg.categories.respiratory.label,
-    "spo2",
-    respiratory.spo2.label,
-    interpolateYears(input.avgSpo2, respiratory.spo2.breakpoints),
-    input.avgSpo2 ?? null
-  );
-  addFactor(
-    "respiratory",
-    cfg.categories.respiratory.label,
-    "breathingRate",
-    respiratory.breathingRate.label,
-    interpolateYears(input.avgBreathingRate, respiratory.breathingRate.breakpoints),
-    input.avgBreathingRate ?? null
-  );
-
-  const lifestyleFactors = cfg.categories.lifestyle.factors;
-  addFactor(
-    "lifestyle",
-    cfg.categories.lifestyle.label,
-    "smoking",
-    lifestyleFactors.smoking.label,
-    computeSmokingYears(lifestyleFactors.smoking, input.lifestyle),
-    input.lifestyle?.smokingStatus ?? null
-  );
-  addFactor(
-    "lifestyle",
-    cfg.categories.lifestyle.label,
-    "alcohol",
-    lifestyleFactors.alcohol.label,
-    interpolateYears(input.lifestyle?.alcoholUnitsPerWeek, lifestyleFactors.alcohol.breakpoints),
-    input.lifestyle?.alcoholUnitsPerWeek ?? null
-  );
-  addFactor(
-    "lifestyle",
-    cfg.categories.lifestyle.label,
-    "diet",
-    lifestyleFactors.diet.label,
-    interpolateYears(input.lifestyle?.dietScore, lifestyleFactors.diet.breakpoints),
-    input.lifestyle?.dietScore ?? null
-  );
-  addFactor(
-    "lifestyle",
-    cfg.categories.lifestyle.label,
-    "stress",
-    lifestyleFactors.stress.label,
-    interpolateYears(input.lifestyle?.stressLevel, lifestyleFactors.stress.breakpoints),
-    input.lifestyle?.stressLevel ?? null
-  );
+      breakdown.push({
+        categoryKey,
+        categoryLabel: category.label,
+        factorKey,
+        label: factorConfig.label,
+        unit: factorConfig.unit,
+        years,
+        inputValue: value ?? null,
+      });
+    });
+  });
 
   const deltaYears = breakdown.reduce((sum, f) => sum + (f.years ?? 0), 0);
   const biologicalAge = Math.round((input.chronologicalAge + deltaYears) * 10) / 10;

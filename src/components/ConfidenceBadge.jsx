@@ -1,8 +1,17 @@
 import React from "react";
 
-const LABELS = { low: "Niedrige Konfidenz", medium: "Mittlere Konfidenz", high: "Hohe Konfidenz" };
+const LABELS = {
+  low: "Konfidenz niedrig",
+  medium: "Konfidenz mittel",
+  high: "Konfidenz hoch",
+};
 
 export default function ConfidenceBadge({ confidence }) {
   if (!confidence) return null;
-  return <span className={`confidence-badge confidence-${confidence}`}>{LABELS[confidence]}</span>;
+  return (
+    <span className={`confidence-badge confidence-${confidence}`}>
+      <span className="confidence-dot" />
+      {LABELS[confidence]}
+    </span>
+  );
 }

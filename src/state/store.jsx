@@ -9,7 +9,7 @@
  * startet (Offline-Fähigkeit).
  */
 
-import React, { createContext, useContext, useEffect, useReducer, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useReducer, useCallback, useMemo, useRef } from "react";
 import * as db from "../storage/db.js";
 import { isConnected as isFitbitConnected } from "../auth/fitbitAuth.js";
 import { syncNow } from "../api/sync.js";
@@ -82,8 +82,12 @@ function buildBioAgeInput(dayRecords, profile, lifestyle) {
 
   const avg = (accessor) => computeBaseline(dayRecords, accessor, { windowDays, endDateIso }).mean;
 
+  const heightM = profile?.heightCm ? profile.heightCm / 100 : null;
+  const bmi = heightM && profile?.weightKg ? profile.weightKg / (heightM * heightM) : undefined;
+
   return {
     chronologicalAge: profile?.chronologicalAge ?? 40,
+    bmi,
     avgRestingHeartRate: avg((r) => r.restingHeartRate) ?? undefined,
     avgHrv: avg((r) => r.hrv) ?? undefined,
     avgCardioFitness: avg((r) => r.cardioFitness) ?? undefined,
@@ -144,6 +148,13 @@ export function AppStateProvider({ children }) {
     dispatch({ type: "SET_LIFESTYLE", payload: { lifestyle: withTimestamp, history } });
   }, []);
 
+  // Aktionen greifen über eine Ref auf den jeweils aktuellen State zu, statt
+  // ihn als useCallback-Dependency zu führen. Dadurch bleiben ihre Identitäten
+  // über die gesamte Laufzeit stabil – sonst würde jede Datenänderung neue
+  // Funktionsreferenzen erzeugen und die Effekte in App.jsx erneut auslösen.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   /** Führt einen Sync aus (Backfill beim ersten Mal, sonst inkrementell) und aktualisiert den State aus IndexedDB. */
   const runSync = useCallback(async () => {
     dispatch({ type: "SYNC_START" });
@@ -154,37 +165,40 @@ export function AppStateProvider({ children }) {
       dispatch({ type: "SYNC_DONE", payload: { errors: result.errors, dayRecords, syncState } });
       return result;
     } catch (err) {
-      dispatch({ type: "SYNC_DONE", payload: { errors: [err.message], dayRecords: state.dayRecords, syncState: state.syncState } });
+      dispatch({
+        type: "SYNC_DONE",
+        payload: { errors: [err.message], dayRecords: stateRef.current.dayRecords, syncState: stateRef.current.syncState },
+      });
       throw err;
     }
-  }, [state.dayRecords, state.syncState]);
+  }, []);
 
   /**
    * Berechnet das Bio-Age neu, wenn entweder noch nie berechnet wurde, die
    * letzte Berechnung > 7 Tage her ist, oder `force` gesetzt ist (z.B. nach
    * Bearbeiten des Lifestyle-Fragebogens, damit Änderungen sofort sichtbar sind).
    */
-  const recomputeBioAge = useCallback(
-    async ({ force = false } = {}) => {
-      const last = state.bioAge?.computedAt ? new Date(state.bioAge.computedAt) : null;
-      const daysSinceLast = last ? (Date.now() - last.getTime()) / 86_400_000 : Infinity;
-      if (!force && daysSinceLast < BIO_AGE_RECOMPUTE_INTERVAL_DAYS) return state.bioAge;
+  const recomputeBioAge = useCallback(async ({ force = false } = {}) => {
+    const current = stateRef.current;
+    const last = current.bioAge?.computedAt ? new Date(current.bioAge.computedAt) : null;
+    const daysSinceLast = last ? (Date.now() - last.getTime()) / 86_400_000 : Infinity;
+    if (!force && daysSinceLast < BIO_AGE_RECOMPUTE_INTERVAL_DAYS) return current.bioAge;
 
-      if (!state.profile) return null;
-      const input = buildBioAgeInput(state.dayRecords, state.profile, state.lifestyle);
-      const result = computeBiologicalAge(input);
-      const withMeta = { ...result, computedAt: new Date().toISOString() };
-      await db.setBioAgeResult(withMeta);
-      dispatch({ type: "SET_BIO_AGE", payload: withMeta });
-      return withMeta;
-    },
-    [state.bioAge, state.profile, state.lifestyle, state.dayRecords]
+    if (!current.profile) return null;
+    const input = buildBioAgeInput(current.dayRecords, current.profile, current.lifestyle);
+    const result = computeBiologicalAge(input);
+    const withMeta = { ...result, computedAt: new Date().toISOString() };
+    await db.setBioAgeResult(withMeta);
+    dispatch({ type: "SET_BIO_AGE", payload: withMeta });
+    return withMeta;
+  }, []);
+
+  const actions = useMemo(
+    () => ({ setConnected, saveProfile, saveLifestyle, runSync, recomputeBioAge }),
+    [setConnected, saveProfile, saveLifestyle, runSync, recomputeBioAge]
   );
 
-  const value = {
-    state,
-    actions: { setConnected, saveProfile, saveLifestyle, runSync, recomputeBioAge },
-  };
+  const value = useMemo(() => ({ state, actions }), [state, actions]);
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }

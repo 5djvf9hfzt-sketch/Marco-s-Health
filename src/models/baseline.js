@@ -62,16 +62,60 @@ export function zScore(value, baseline) {
 export function computeSleepConsistencyStdDevMinutes(dayRecords, endDateIso, windowDays = 7) {
   const rangeRecords = filterRange(dayRecords, endDateIso, windowDays);
   const minutesSinceMidnight = rangeRecords
-    .map((r) => r.sleepStartTime)
-    .filter(Boolean)
-    .map((iso) => {
-      const d = new Date(iso);
-      const totalMinutes = d.getUTCHours() * 60 + d.getUTCMinutes();
+    .map((r) => parseLocalClockMinutes(r.sleepStartTime))
+    .filter((v) => v != null)
+    .map((totalMinutes) =>
       // Vor Mittag = "spät in der Nacht" (nach Mitternacht eingeschlafen) -> +24h verschieben.
-      return totalMinutes < 12 * 60 ? totalMinutes + 24 * 60 : totalMinutes;
-    });
+      totalMinutes < 12 * 60 ? totalMinutes + 24 * 60 : totalMinutes
+    );
   if (minutesSinceMidnight.length < 2) return null;
   return stdDev(minutesSinceMidnight);
+}
+
+/**
+ * Liest die Uhrzeit direkt aus dem Fitbit-Zeitstempel ("2026-09-04T23:41:30.000").
+ * Fitbit liefert lokale Gerätezeit OHNE Zeitzonen-Suffix – würde man das durch
+ * `new Date(...)` schicken, interpretiert der Browser es als lokale Zeit und
+ * eine spätere Umrechnung (z.B. getUTCHours) würde die Uhrzeit verschieben.
+ * Für "wann bin ich eingeschlafen" wollen wir exakt die Uhr des Geräts.
+ */
+export function parseLocalClockMinutes(timestamp) {
+  if (!timestamp) return null;
+  const match = /T(\d{2}):(\d{2})/.exec(timestamp);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+/** Formatiert Minuten-seit-Mitternacht als "23:41" (Werte > 24h werden zurückgefaltet). */
+export function formatClockMinutes(minutes) {
+  if (minutes == null) return null;
+  const normalized = ((minutes % 1440) + 1440) % 1440;
+  const h = String(Math.floor(normalized / 60)).padStart(2, "0");
+  const m = String(Math.round(normalized % 60)).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+/**
+ * Vergleicht den aktuellsten Wert einer Metrik mit der Baseline der
+ * vorangegangenen Tage – Grundlage für die "vs. Ø 30 Tage"-Anzeigen im UI.
+ * Gibt null zurück, wenn es zu wenig Vergleichsdaten gibt (statt einer
+ * Scheingenauigkeit aus ein bis zwei Messwerten).
+ */
+export function computeDelta(dayRecords, accessor, endDateIso, windowDays = 30) {
+  const current = accessor(dayRecords.find((r) => r.date === endDateIso) ?? {});
+  if (!Number.isFinite(current)) return null;
+
+  // Baseline ohne den heutigen Wert, damit sich der Tag nicht mit sich selbst vergleicht.
+  const previous = dayRecords.filter((r) => r.date !== endDateIso);
+  const baseline = computeBaseline(previous, accessor, { windowDays, endDateIso });
+  if (baseline.mean == null || baseline.sampleSize < 3) return null;
+
+  return {
+    current,
+    baselineMean: baseline.mean,
+    absolute: current - baseline.mean,
+    percent: baseline.mean !== 0 ? ((current - baseline.mean) / Math.abs(baseline.mean)) * 100 : null,
+  };
 }
 
 /** Summe der bekannten aktiven Minuten der letzten `windowDays` Tage – KEINE Hochrechnung bei Lücken. */

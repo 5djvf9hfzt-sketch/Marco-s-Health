@@ -45,6 +45,34 @@ Tagesdaten arbeitet.
 
 ---
 
+## Was das Dashboard zeigt
+
+**Home**
+- Biologisches Alter als zentrale Kennzahl inkl. Abweichung zum chronologischen
+  Alter, Konfidenz-Indikator und Faktor-Aufschlüsselung (nach Kategorie oder
+  als Detailliste aller 15 Einzelfaktoren)
+- Tagesscores als Ringe: Recovery (0–100), Sleep Score (0–100), Strain (0–21)
+- Vitalwerte-Kacheln mit Mini-Verlauf und Abweichung zur 30-Tage-Baseline:
+  HRV, Ruhepuls, SpO₂, Atemfrequenz, VO₂max, Schritte
+- Schlaf der letzten Nacht: Dauer, Effizienz, Phasenverteilung (Tief/REM/
+  Leicht/Wach), Zeit im Bett, Einschlafzeit, Schlafdefizit der letzten 7 Tage
+- Aktivität: Zonenminuten der Woche gegen die WHO-Empfehlung, Kalorien
+
+**Trends** – Flächendiagramme mit 7/30/90-Tage-Umschaltung für Recovery,
+Sleep Score, Strain, HRV, Ruhepuls, VO₂max, Schlafdauer, Schlafeffizienz,
+Schritte, Zonenminuten, Kalorien, SpO₂ und Atemfrequenz – jeweils mit Ø/Min/Max
+und Angabe, an wie vielen Tagen des Zeitraums überhaupt Daten vorlagen.
+
+**Lifestyle** – Profil (Alter, Geschlecht, Gewicht, Größe inkl. berechnetem BMI)
+und Fragebogen (Rauchen, Alkohol, Ernährung, Stress), beides jederzeit
+editierbar, mit Änderungsverlauf.
+
+**Insights** – automatisch erzeugte Hinweise bei Abweichungen von der Baseline,
+zu Schlafdefizit, Schlafrhythmus, Wochenaktivität und dem größten Einzelhebel
+im biologischen Alter.
+
+---
+
 ## Architektur-Überblick
 
 ```

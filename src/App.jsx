@@ -11,16 +11,15 @@ import NavBar from "./components/NavBar.jsx";
 export default function App() {
   const { state, actions } = useAppState();
   const [screen, setScreen] = useState("home");
-  const [authStatus, setAuthStatus] = useState(null); // null | 'checking' | 'error'
+  const [authStatus, setAuthStatus] = useState("checking");
   const [authErrorMessage, setAuthErrorMessage] = useState("");
-  const hasTriggeredPostConnectSync = useRef(false);
-  const hasTriggeredRoutineSync = useRef(false);
+  const hasSynced = useRef(false);
+  const hasComputedBioAge = useRef(false);
 
   // Einmalig beim App-Start prüfen, ob wir gerade von Fitbits
   // Zustimmungsseite zurückkommen (?code=...&state=...).
   useEffect(() => {
     (async () => {
-      setAuthStatus("checking");
       const result = await handleRedirectCallback();
       if (result.status === "connected") {
         actions.setConnected(true);
@@ -29,48 +28,44 @@ export default function App() {
       }
       setAuthStatus(result.status);
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [actions]);
 
-  const needsOnboarding = !state.connected || !state.profile || !state.lifestyle;
-
-  // Direkt nachdem die Verbindung zu Fitbit steht (frisch verbunden ODER
-  // App neu geöffnet mit bereits bestehender Verbindung, aber noch ohne
-  // Onboarding-Daten), einmalig synchronisieren.
+  // Genau ein Sync pro App-Start, sobald eine Fitbit-Verbindung besteht.
+  // Beim ersten Mal ist das der 90-Tage-Backfill, danach nur noch die neuen
+  // Tage. Läuft bewusst schon während des Onboardings mit, damit die Historie
+  // bereits geladen ist, wenn der Nutzer den Fragebogen abgeschlossen hat.
   useEffect(() => {
-    if (state.bootstrapped && state.connected && !hasTriggeredPostConnectSync.current && needsOnboarding) {
-      hasTriggeredPostConnectSync.current = true;
-      actions.runSync().catch((err) => console.warn("Sync fehlgeschlagen:", err));
-    }
-  }, [state.bootstrapped, state.connected, needsOnboarding, actions]);
+    if (!state.bootstrapped || !state.connected || hasSynced.current) return;
+    hasSynced.current = true;
+    actions.runSync().catch((err) => console.warn("Sync fehlgeschlagen:", err));
+  }, [state.bootstrapped, state.connected, actions]);
 
-  // Sobald Onboarding abgeschlossen ist (Profil + Lifestyle vorhanden),
-  // bei jedem App-Start genau einmal inkrementell synchronisieren + Bio-Age
-  // ggf. neu berechnen (recomputeBioAge prüft selbst das 7-Tage-Intervall).
+  // Bio-Age berechnen, sobald Profil, Fragebogen und Daten vorliegen.
+  // recomputeBioAge() prüft selbst, ob die letzte Berechnung älter als eine
+  // Woche ist – häufigeres Aufrufen ist also unschädlich.
   useEffect(() => {
-    if (state.bootstrapped && !needsOnboarding && !hasTriggeredRoutineSync.current) {
-      hasTriggeredRoutineSync.current = true;
-      actions
-        .runSync()
-        .catch((err) => console.warn("Sync fehlgeschlagen:", err))
-        .finally(() => actions.recomputeBioAge());
-    }
-  }, [state.bootstrapped, needsOnboarding, actions]);
+    if (!state.bootstrapped || state.isSyncing || hasComputedBioAge.current) return;
+    if (!state.profile || !state.lifestyle) return;
+    hasComputedBioAge.current = true;
+    actions.recomputeBioAge().catch((err) => console.warn("Bio-Age-Berechnung fehlgeschlagen:", err));
+  }, [state.bootstrapped, state.isSyncing, state.profile, state.lifestyle, actions]);
 
   if (!state.bootstrapped || authStatus === "checking") {
     return (
       <div className="centered-screen">
-        <p>VitalSync wird geladen …</p>
+        <span className="spinner" style={{ width: 22, height: 22, borderWidth: 2 }} />
+        <p style={{ marginTop: 16 }}>VitalSync wird geladen …</p>
       </div>
     );
   }
 
+  const needsOnboarding = !state.connected || !state.profile || !state.lifestyle;
   if (needsOnboarding) {
     return <Onboarding authErrorMessage={authErrorMessage} />;
   }
 
   const screens = {
-    home: <Home onNavigate={setScreen} />,
+    home: <Home />,
     trends: <Trends />,
     lifestyle: <Lifestyle />,
     insights: <Insights />,

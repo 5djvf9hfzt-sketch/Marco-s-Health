@@ -75,6 +75,7 @@ async function fetchAndMergeRange(startIso, endIso, onProgress) {
     ["heart", api.getHeartRateSeries],
     ["sleep", api.getSleepSeries],
     ["steps", api.getStepsSeries],
+    ["calories", api.getCaloriesSeries],
     ["fairlyActive", api.getFairlyActiveMinutesSeries],
     ["veryActive", api.getVeryActiveMinutesSeries],
     ["hrv", api.getHrvSeries],
@@ -113,6 +114,9 @@ async function fetchAndMergeRange(startIso, endIso, onProgress) {
             const summary = entry.levels?.summary ?? {};
             day.sleepDurationMin = toNumberOrUndefined(entry.minutesAsleep);
             day.sleepEfficiency = toNumberOrUndefined(entry.efficiency);
+            day.timeInBedMin = toNumberOrUndefined(entry.timeInBed);
+            day.minutesAwake = toNumberOrUndefined(entry.minutesAwake);
+            day.awakeningsCount = toNumberOrUndefined(summary.wake?.count);
             day.sleepStages = {
               deep: toNumberOrUndefined(summary.deep?.minutes),
               light: toNumberOrUndefined(summary.light?.minutes),
@@ -120,10 +124,15 @@ async function fetchAndMergeRange(startIso, endIso, onProgress) {
               wake: toNumberOrUndefined(summary.wake?.minutes),
             };
             day.sleepStartTime = entry.startTime;
+            day.sleepEndTime = entry.endTime;
           });
       } else if (name === "steps") {
         series.forEach((entry) => {
           ensure(entry.dateTime).steps = toNumberOrUndefined(entry.value);
+        });
+      } else if (name === "calories") {
+        series.forEach((entry) => {
+          ensure(entry.dateTime).calories = toNumberOrUndefined(entry.value);
         });
       } else if (name === "fairlyActive") {
         series.forEach((entry) => {
@@ -171,7 +180,7 @@ async function fetchAndMergeRange(startIso, endIso, onProgress) {
     onProgress?.({ completed, total: tasks.length, currentEndpoint: name });
   }
 
-  return { days, errors };
+  return { days, errors, totalEndpoints: tasks.length };
 }
 
 /** Läuft einmalig beim ersten erfolgreichen Login: lädt INITIAL_BACKFILL_DAYS Tage rückwirkend. */
@@ -179,9 +188,17 @@ export async function runInitialBackfill(onProgress) {
   const startIso = isoDaysAgo(INITIAL_BACKFILL_DAYS);
   const endIso = todayIso();
 
-  const { days, errors } = await fetchAndMergeRange(startIso, endIso, onProgress);
+  const { days, errors, totalEndpoints } = await fetchAndMergeRange(startIso, endIso, onProgress);
   await setDays(days);
-  await setSyncState({ backfillComplete: true, lastSyncedDate: endIso });
+
+  // Nur wenn mindestens ein Endpunkt geantwortet hat, gilt der Backfill als
+  // erledigt. Sonst (z.B. Relay nicht erreichbar, Token abgelaufen, offline)
+  // würde die App den 90-Tage-Nachlauf nie wieder versuchen und dauerhaft mit
+  // einem leeren Dashboard dastehen.
+  if (errors.length < totalEndpoints) {
+    await setSyncState({ backfillComplete: true, lastSyncedDate: endIso });
+  }
+
   return { daysSynced: Object.keys(days).length, errors };
 }
 
@@ -199,9 +216,15 @@ export async function runIncrementalSync(onProgress) {
     : isoDaysAgo(INCREMENTAL_OVERLAP_DAYS);
   const endIso = todayIso();
 
-  const { days, errors } = await fetchAndMergeRange(overlapStart, endIso, onProgress);
+  const { days, errors, totalEndpoints } = await fetchAndMergeRange(overlapStart, endIso, onProgress);
   await setDays(days);
-  await setSyncState({ backfillComplete: true, lastSyncedDate: endIso });
+
+  // lastSyncedDate nur vorrücken, wenn überhaupt etwas geladen wurde – sonst
+  // würden die übersprungenen Tage beim nächsten Start nicht mehr abgefragt.
+  if (errors.length < totalEndpoints) {
+    await setSyncState({ backfillComplete: true, lastSyncedDate: endIso });
+  }
+
   return { daysSynced: Object.keys(days).length, errors };
 }
 

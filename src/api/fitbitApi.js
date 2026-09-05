@@ -116,6 +116,17 @@ export function getStepsSeries(startIso, endIso) {
   );
 }
 
+/** Verbrannte Kalorien pro Tag (inkl. Grundumsatz). Range-Limit: 1 Jahr. */
+export function getCaloriesSeries(startIso, endIso) {
+  return fetchChunkedRange(
+    (s, e) => `/1/user/-/activities/calories/date/${s}/${e}.json`,
+    startIso,
+    endIso,
+    366,
+    ["activities-calories"]
+  );
+}
+
 export function getFairlyActiveMinutesSeries(startIso, endIso) {
   return fetchChunkedRange(
     (s, e) => `/1/user/-/activities/minutesFairlyActive/date/${s}/${e}.json`,
