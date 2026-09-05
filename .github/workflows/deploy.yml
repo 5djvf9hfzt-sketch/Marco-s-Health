@@ -42,7 +42,13 @@ jobs:
           echo "Base-Pfad für den Build: $VITE_BASE_PATH"
           npm run build
 
+      # enablement: true schaltet GitHub Pages bei Bedarf selbst ein (nutzt die
+      # pages:write-Berechtigung oben). Ohne diese Zeile bricht der Workflow mit
+      # "Get Pages site failed" ab, solange Pages nicht von Hand unter
+      # Settings -> Pages auf "GitHub Actions" gestellt wurde.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
