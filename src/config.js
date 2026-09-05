@@ -15,7 +15,7 @@ export const GOOGLE_CONFIG = {
   // (APIs & Dienste → Anmeldedaten → OAuth-Client-ID, Typ "Webanwendung").
   // Sie ist kein Geheimnis – bei einem PKCE-Flow steht sie immer im Browser.
   // Siehe README.md Abschnitt (a) für die Schritt-für-Schritt-Anleitung.
-  clientId: "DEINE_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+  clientId: "549302552201-omrca0s37bstlc7vs86o7hmfqu1jj83c.apps.googleusercontent.com",
 
   /**
    * OPTIONAL und im Normalfall leer lassen.
