@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useAppState } from "./state/store.jsx";
-import { handleRedirectCallback } from "./auth/googleAuth.js";
+import { handleRedirectCallback, shouldAttemptSilentRenewal, startLogin } from "./auth/googleAuth.js";
 import Onboarding from "./screens/Onboarding.jsx";
 import Home from "./screens/Home.jsx";
 import Trends from "./screens/Trends.jsx";
@@ -28,6 +28,17 @@ export default function App() {
       setAuthStatus(result.status);
     })();
   }, [actions]);
+
+  // Ist das Access-Token abgelaufen, holt die App beim Start still ein neues
+  // (nur im impliziten Flow nötig). Das ist ein Seiten-Redirect: Besteht die
+  // Google-Sitzung noch, ist der Nutzer nach einem kurzen Aufblitzen wieder
+  // hier – sonst meldet handleRedirectCallback "reauth_required".
+  useEffect(() => {
+    if (!state.bootstrapped || authStatus === "checking") return;
+    if (state.connected && shouldAttemptSilentRenewal()) {
+      startLogin({ silent: true });
+    }
+  }, [state.bootstrapped, state.connected, authStatus]);
 
   // Genau ein Sync pro App-Start, sobald eine Google-Verbindung besteht.
   // Beim ersten Mal ist das der 90-Tage-Backfill, danach nur noch die neuen

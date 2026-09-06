@@ -7,6 +7,7 @@ import SleepStagesBar from "../components/SleepStagesBar.jsx";
 import Disclaimer from "../components/Disclaimer.jsx";
 import { computeRecoveryScore, computeStrainScore, computeSleepScore, computeSleepDebtMinutes, SLEEP_NEED_MINUTES } from "../models/scores.js";
 import { computeDelta, computeWeeklyActiveMinutes, parseLocalClockMinutes, formatClockMinutes } from "../models/baseline.js";
+import { needsReconnect, startLogin } from "../auth/googleAuth.js";
 
 const WHO_WEEKLY_ACTIVE_MINUTES = 150;
 
@@ -79,6 +80,16 @@ export default function Home() {
           {syncLabel}
         </button>
       </div>
+
+      {needsReconnect() && (
+        <div className="notice notice-warn" style={{ marginBottom: 14 }}>
+          Die Google-Sitzung ist abgelaufen. Deine gespeicherten Daten bleiben erhalten – für neue
+          Werte einmal neu verbinden.
+          <button className="btn-ghost" style={{ marginTop: 10 }} onClick={() => startLogin()}>
+            Neu verbinden
+          </button>
+        </div>
+      )}
 
       {state.syncErrors.length > 0 && (
         <div className="notice notice-warn" style={{ marginBottom: 14 }}>

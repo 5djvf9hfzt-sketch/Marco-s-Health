@@ -18,19 +18,21 @@ export const GOOGLE_CONFIG = {
   clientId: "549302552201-omrca0s37bstlc7vs86o7hmfqu1jj83c.apps.googleusercontent.com",
 
   /**
-   * OPTIONAL und im Normalfall leer lassen.
+   * DER SCHALTER ZWISCHEN DEN BEIDEN LOGIN-VERFAHREN (siehe googleAuth.js).
    *
-   * Google stellt für "Webanwendung"-Clients zusätzlich ein Client-Secret aus.
-   * Der PKCE-Flow ist genau dafür gemacht, OHNE dieses Secret auszukommen.
-   * Falls Google den Token-Tausch trotzdem mit "client_secret is missing"
-   * ablehnt, gibt es zwei Wege:
+   * LEER (Standard) -> Impliziter Flow, komplett ohne Server.
+   *   Google liefert das Access-Token direkt zurück, es gibt keinen
+   *   Token-Tausch und damit auch kein Client-Secret-Problem. Das Token gilt
+   *   eine Stunde; danach holt die App beim Start still ein neues.
    *
-   *   1. (empfohlen) Den mitgelieferten Cloudflare-Worker aus optional-token-helper/
-   *      deployen, das Secret dort als verschlüsselte Variable hinterlegen und
-   *      hier unten `tokenRelayUrl` eintragen. Das Secret bleibt dann geheim.
-   *   2. (nicht empfohlen) Das Secret hier eintragen. Es landet damit im
-   *      öffentlichen Browser-Code und im GitHub-Repository – Google sperrt
-   *      öffentlich auffindbare Secrets unter Umständen automatisch.
+   * GESETZT -> Authorization Code Flow mit PKCE über den Mini-Worker aus
+   *   optional-token-helper/, der das Client-Secret serverseitig ergänzt.
+   *   Dafür gibt es Refresh-Tokens und einen Login, der im Hintergrund hält.
+   *   Beispiel: "https://vitalsync-token.deinname.workers.dev"
+   *
+   * Das Client-Secret gehört NIEMALS hierher – diese Datei landet im
+   * öffentlichen Browser-Code und im GitHub-Repository. Google sperrt
+   * öffentlich auffindbare Secrets unter Umständen automatisch.
    */
   tokenRelayUrl: "",
 

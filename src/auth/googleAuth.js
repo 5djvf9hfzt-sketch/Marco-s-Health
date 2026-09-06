@@ -1,26 +1,32 @@
 /**
- * Google OAuth 2.0 – Authorization Code Flow with PKCE
- * ======================================================
+ * Google OAuth 2.0 – zwei Betriebsarten
+ * =======================================
  *
- * Kompletter clientseitiger Login-Flow gegen Google, ohne Backend.
+ * Google verlangt für OAuth-Clients vom Typ "Webanwendung" beim Token-Tausch
+ * zwingend ein Client-Secret – auch dann, wenn der Flow mit PKCE abgesichert
+ * ist (nachgewiesen: die Antwort lautet
+ * `{"error":"invalid_request","error_description":"client_secret is missing."}`).
+ * Ein Secret darf aber niemals in den öffentlichen Browser-Code.
  *
- * WARUM DAS HIER OHNE SERVER FUNKTIONIERT:
- * Anders als die alte Fitbit Web API setzt Google auf beiden benötigten
- * Endpunkten CORS-Header (nachgemessen: sowohl
- * https://oauth2.googleapis.com/token als auch https://health.googleapis.com
- * geben die anfragende Origin frei). Ein Browser darf diese Aufrufe daher
- * direkt stellen – es braucht keinen Proxy und keinen Server.
+ * Deshalb kennt dieses Modul zwei Wege. Umgeschaltet wird allein über
+ * GOOGLE_CONFIG.tokenRelayUrl in config.js:
  *
- * PKCE (siehe pkce.js) sichert den Flow ab, ohne dass ein Client-Secret im
- * Browser liegen muss.
+ *  A) tokenRelayUrl LEER  ->  Impliziter Flow ("response_type=token")
+ *     Google liefert das Access-Token direkt im URL-Fragment zurück, es gibt
+ *     gar keinen Token-Tausch und damit auch kein Secret-Problem. Die App
+ *     bleibt vollständig statisch, ganz ohne Serverkomponente.
+ *     Preis: Das Token gilt nur eine Stunde und es gibt kein Refresh-Token.
+ *     Läuft es ab, holt die App beim nächsten Start still ein neues
+ *     (prompt=none) – solange die Google-Sitzung im Browser besteht, ohne
+ *     jede Nutzerinteraktion.
  *
- * Ablauf:
- *   startLogin()             Button "Mit Google verbinden" -> Redirect zu Google
- *   handleRedirectCallback() beim App-Start prüfen: kommen wir gerade von
- *                            Google zurück? Falls ja: Code gegen Tokens tauschen.
- *   getValidAccessToken()    vor JEDEM API-Call aufrufen. Liefert ein
- *                            garantiert (noch) gültiges Access Token und
- *                            erneuert es bei Bedarf automatisch.
+ *  B) tokenRelayUrl GESETZT  ->  Authorization Code Flow mit PKCE
+ *     Der Token-Tausch läuft über den Mini-Worker aus optional-token-helper/,
+ *     der das Secret serverseitig ergänzt. Dafür gibt es echte
+ *     Refresh-Tokens und damit einen Login, der im Hintergrund erneuert wird.
+ *
+ * Beide Wege benutzen denselben state-Parameter als CSRF-Schutz und legen das
+ * Ergebnis im selben Format ab, sodass der Rest der App nichts davon merkt.
  */
 
 import { GOOGLE_CONFIG } from "../config.js";
@@ -31,27 +37,23 @@ const STORAGE_KEY_TOKENS = "vitalsync.google.tokens";
 // "Redirect zurück" überleben -> sessionStorage statt localStorage.
 const STORAGE_KEY_VERIFIER = "vitalsync.google.pkce_verifier";
 const STORAGE_KEY_STATE = "vitalsync.google.pkce_state";
+// Merkt sich, dass in dieser Browser-Sitzung bereits eine stille Erneuerung
+// versucht wurde – ohne diese Sperre könnte ein fehlgeschlagener
+// prompt=none-Versuch eine Endlos-Weiterleitung auslösen.
+const STORAGE_KEY_SILENT_TRIED = "vitalsync.google.silent_tried";
 
-// Sicherheitsmarge: Wir erneuern das Token schon 60 Sekunden VOR dem
-// tatsächlichen Ablauf, damit ein Request, der genau in dem Moment startet,
-// nicht mit einem abgelaufenen Token bei Google ankommt.
+// Sicherheitsmarge: Wir behandeln das Token schon 60 Sekunden vor dem
+// tatsächlichen Ablauf als ungültig, damit ein Request, der genau in dem
+// Moment startet, nicht mit einem abgelaufenen Token bei Google ankommt.
 const EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
-/**
- * Google-Access-Tokens laufen nach einer Stunde ab. Für die Erneuerung im
- * Hintergrund braucht es ein Refresh-Token, das Google nur ausstellt, wenn
- * beim Login access_type=offline und prompt=consent gesetzt sind (siehe
- * startLogin). Bekommen wir keines, bleibt die Verbindung trotzdem eine
- * Stunde nutzbar – danach meldet die App ehrlich "bitte neu verbinden",
- * statt still zu scheitern.
- */
+/** true, wenn der Relay konfiguriert ist – dann läuft Weg B (Code Flow). */
+function usesCodeFlow() {
+  return Boolean(GOOGLE_CONFIG.tokenRelayUrl);
+}
+
 function tokenEndpoint() {
-  // Nur falls Google für den konkreten Client zwingend ein Secret verlangt,
-  // kann der Token-Tausch über den optionalen Worker laufen, der das Secret
-  // serverseitig ergänzt (siehe config.js -> tokenRelayUrl).
-  return GOOGLE_CONFIG.tokenRelayUrl
-    ? `${GOOGLE_CONFIG.tokenRelayUrl.replace(/\/$/, "")}/oauth/token`
-    : GOOGLE_CONFIG.tokenUrl;
+  return `${GOOGLE_CONFIG.tokenRelayUrl.replace(/\/$/, "")}/oauth/token`;
 }
 
 function readStoredTokens() {
@@ -64,120 +66,183 @@ function readStoredTokens() {
   }
 }
 
-function storeTokens(tokenResponse, previous) {
-  // Google liefert "expires_in" als Sekunden ab JETZT. Wir rechnen das sofort
-  // in einen absoluten Zeitstempel um.
-  const expiresAtMs = Date.now() + (tokenResponse.expires_in ?? 3600) * 1000;
+function storeTokens({ accessToken, expiresInSeconds, refreshToken, scope }, previous) {
   const record = {
-    accessToken: tokenResponse.access_token,
+    accessToken,
     // Beim Refresh schickt Google KEIN neues refresh_token mit – das alte
     // bleibt gültig und muss deshalb erhalten bleiben.
-    refreshToken: tokenResponse.refresh_token ?? previous?.refreshToken ?? null,
-    scope: tokenResponse.scope,
-    expiresAtMs,
+    refreshToken: refreshToken ?? previous?.refreshToken ?? null,
+    scope,
+    expiresAtMs: Date.now() + (Number(expiresInSeconds) || 3600) * 1000,
   };
   localStorage.setItem(STORAGE_KEY_TOKENS, JSON.stringify(record));
   return record;
 }
 
 export function isConnected() {
+  // Bewusst unabhängig vom Ablaufdatum: Ist schon einmal eine Verbindung
+  // zustande gekommen, soll das Dashboard mit den gespeicherten Daten
+  // sichtbar bleiben, auch wenn das Token gerade erneuert werden muss.
   return readStoredTokens() !== null;
 }
 
 export function logout() {
   localStorage.removeItem(STORAGE_KEY_TOKENS);
+  sessionStorage.removeItem(STORAGE_KEY_SILENT_TRIED);
 }
 
-/** True, wenn das Token abgelaufen ist und mangels Refresh-Token nicht erneuert werden kann. */
-export function needsReconnect() {
-  const stored = readStoredTokens();
-  if (!stored) return false;
-  return !stored.refreshToken && Date.now() >= stored.expiresAtMs;
+function isExpired(stored) {
+  return Date.now() >= stored.expiresAtMs - EXPIRY_SAFETY_MARGIN_MS;
 }
 
 /**
- * Schritt 1: Nutzer klickt "Mit Google verbinden". Wir erzeugen das
- * PKCE-Paar + einen CSRF-state, merken uns beides kurzfristig und schicken
- * den Browser per echtem Redirect zu Googles Zustimmungsseite.
+ * true, wenn das Token abgelaufen ist und nicht automatisch erneuert werden
+ * kann – die Oberfläche zeigt dann einen "Neu verbinden"-Hinweis an.
  */
-export async function startLogin() {
-  const codeVerifier = generateCodeVerifier();
-  const codeChallenge = await generateCodeChallenge(codeVerifier);
-  const state = generateState();
+export function needsReconnect() {
+  const stored = readStoredTokens();
+  if (!stored || !isExpired(stored)) return false;
+  // Im Code Flow kann ein Refresh-Token die Erneuerung übernehmen.
+  if (usesCodeFlow() && stored.refreshToken) return false;
+  // Im impliziten Flow ist eine stille Erneuerung nur einmal je Sitzung sinnvoll.
+  return sessionStorage.getItem(STORAGE_KEY_SILENT_TRIED) === "1";
+}
 
-  sessionStorage.setItem(STORAGE_KEY_VERIFIER, codeVerifier);
+/** true, wenn ein stiller Erneuerungsversuch (Weg A) jetzt sinnvoll ist. */
+export function shouldAttemptSilentRenewal() {
+  if (usesCodeFlow()) return false;
+  const stored = readStoredTokens();
+  if (!stored || !isExpired(stored)) return false;
+  return sessionStorage.getItem(STORAGE_KEY_SILENT_TRIED) !== "1";
+}
+
+/**
+ * Startet den Login per echtem Seiten-Redirect.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.silent] Nur Weg A: ohne Nutzerinteraktion
+ *   erneuern (prompt=none). Besteht die Google-Sitzung noch, kommt der
+ *   Browser sofort mit einem frischen Token zurück; sonst mit einem Fehler,
+ *   den handleRedirectCallback() als "bitte neu verbinden" meldet.
+ */
+export async function startLogin({ silent = false } = {}) {
+  const state = generateState();
   sessionStorage.setItem(STORAGE_KEY_STATE, state);
 
   const params = new URLSearchParams({
     client_id: GOOGLE_CONFIG.clientId,
-    response_type: "code",
-    code_challenge: codeChallenge,
-    code_challenge_method: "S256",
     state,
     scope: GOOGLE_CONFIG.scopes.join(" "),
     redirect_uri: GOOGLE_CONFIG.redirectUri,
-    // access_type=offline + prompt=consent sind die Bedingung dafür, dass
-    // Google überhaupt ein Refresh-Token ausstellt. Ohne sie müsste sich der
-    // Nutzer stündlich neu anmelden.
-    access_type: "offline",
-    // select_account erzwingt zusätzlich die Kontoauswahl. Ohne das nimmt
-    // Google stillschweigend das im Browser zuletzt verwendete Konto – auf
-    // Geräten mit mehreren Google-Konten führt das zu einem "access_denied",
-    // dessen Ursache (falsches Konto) nicht erkennbar ist.
-    prompt: "select_account consent",
+    // include_granted_scopes wird bewusst NICHT gesetzt: zuvor erteilte
+    // Google-Fit-Altberechtigungen können sonst mit den neuen
+    // Health-API-Scopes kollidieren.
   });
 
-  // include_granted_scopes wird bewusst NICHT gesetzt: zuvor erteilte
-  // Google-Fit-Altberechtigungen können sonst mit den neuen
-  // Health-API-Scopes kollidieren.
+  if (usesCodeFlow()) {
+    // --- Weg B: Authorization Code Flow mit PKCE -----------------------
+    const codeVerifier = generateCodeVerifier();
+    sessionStorage.setItem(STORAGE_KEY_VERIFIER, codeVerifier);
+    params.set("response_type", "code");
+    params.set("code_challenge", await generateCodeChallenge(codeVerifier));
+    params.set("code_challenge_method", "S256");
+    // access_type=offline + prompt=consent sind die Bedingung dafür, dass
+    // Google überhaupt ein Refresh-Token ausstellt.
+    params.set("access_type", "offline");
+    params.set("prompt", "select_account consent");
+  } else {
+    // --- Weg A: Impliziter Flow ---------------------------------------
+    params.set("response_type", "token");
+    if (silent) {
+      // prompt=none zeigt keinerlei Oberfläche: Entweder Google leitet
+      // sofort mit einem Token zurück, oder es kommt ein Fehler.
+      params.set("prompt", "none");
+      sessionStorage.setItem(STORAGE_KEY_SILENT_TRIED, "1");
+    } else {
+      // select_account erzwingt die Kontoauswahl. Ohne das nimmt Google
+      // stillschweigend das zuletzt verwendete Konto – auf Geräten mit
+      // mehreren Google-Konten führt das zu einem access_denied, dessen
+      // Ursache nicht erkennbar ist.
+      params.set("prompt", "select_account");
+      sessionStorage.removeItem(STORAGE_KEY_SILENT_TRIED);
+    }
+  }
 
   window.location.href = `${GOOGLE_CONFIG.authorizeUrl}?${params.toString()}`;
 }
 
+/** Prüft den state-Parameter (CSRF-Schutz) und räumt ihn auf. */
+function consumeState(returnedState) {
+  const expected = sessionStorage.getItem(STORAGE_KEY_STATE);
+  sessionStorage.removeItem(STORAGE_KEY_STATE);
+  return Boolean(expected) && returnedState === expected;
+}
+
+function cleanUrl() {
+  window.history.replaceState({}, "", GOOGLE_CONFIG.redirectUri);
+}
+
 /**
- * Schritt 2: beim Laden der App aufrufen. Prüft, ob die aktuelle URL
- * Google-Redirect-Parameter enthält. Falls ja: validiert den state
- * (CSRF-Schutz), tauscht den Code gegen Tokens und räumt danach die URL
- * wieder auf (damit ein Reload nicht denselben, dann verbrauchten Code
- * erneut einlöst).
+ * Beim Laden der App aufrufen. Erkennt die Rückkehr von Google und wertet sie
+ * aus – im impliziten Flow steht das Ergebnis im URL-Fragment (#...), im Code
+ * Flow in der Query (?...).
  *
- * Rückgabe: { status: "connected" | "error" | "idle", message? }
+ * @returns {Promise<{status: "connected"|"error"|"reauth_required"|"idle", message?: string}>}
  */
 export async function handleRedirectCallback() {
   const url = new URL(window.location.href);
-  const code = url.searchParams.get("code");
-  const returnedState = url.searchParams.get("state");
-  const errorParam = url.searchParams.get("error");
+  const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : "");
 
-  if (!code && !errorParam) {
+  const accessToken = hashParams.get("access_token");
+  const code = url.searchParams.get("code");
+  const errorParam = hashParams.get("error") ?? url.searchParams.get("error");
+
+  if (!accessToken && !code && !errorParam) {
     return { status: "idle" };
   }
 
-  window.history.replaceState({}, "", GOOGLE_CONFIG.redirectUri);
+  const returnedState = hashParams.get("state") ?? url.searchParams.get("state");
+  cleanUrl();
 
   if (errorParam) {
+    // Ein fehlgeschlagener stiller Versuch ist kein echter Fehler: Die
+    // Google-Sitzung ist nur abgelaufen, der Nutzer muss einmal tippen.
+    const wasSilent = sessionStorage.getItem(STORAGE_KEY_SILENT_TRIED) === "1";
+    if (wasSilent && ["login_required", "consent_required", "interaction_required"].includes(errorParam)) {
+      return { status: "reauth_required" };
+    }
     return { status: "error", message: `Google hat den Login abgelehnt: ${errorParam}` };
   }
 
-  const expectedState = sessionStorage.getItem(STORAGE_KEY_STATE);
-  const codeVerifier = sessionStorage.getItem(STORAGE_KEY_VERIFIER);
-  sessionStorage.removeItem(STORAGE_KEY_STATE);
-  sessionStorage.removeItem(STORAGE_KEY_VERIFIER);
-
-  if (!expectedState || returnedState !== expectedState) {
+  if (!consumeState(returnedState)) {
     return {
       status: "error",
       message: "Sicherheitsprüfung fehlgeschlagen (state stimmt nicht überein). Bitte erneut versuchen.",
     };
   }
+
+  // --- Weg A: Token kam direkt im Fragment ---
+  if (accessToken) {
+    storeTokens(
+      {
+        accessToken,
+        expiresInSeconds: hashParams.get("expires_in"),
+        scope: hashParams.get("scope"),
+      },
+      null
+    );
+    sessionStorage.removeItem(STORAGE_KEY_SILENT_TRIED);
+    return { status: "connected" };
+  }
+
+  // --- Weg B: Code gegen Tokens tauschen (über den Relay) ---
+  const codeVerifier = sessionStorage.getItem(STORAGE_KEY_VERIFIER);
+  sessionStorage.removeItem(STORAGE_KEY_VERIFIER);
   if (!codeVerifier) {
     return { status: "error", message: "PKCE-Verifier nicht gefunden (Session abgelaufen?). Bitte erneut versuchen." };
   }
 
   try {
-    // Token-Exchange als PUBLIC CLIENT: kein Secret, dafür der code_verifier
-    // im Klartext. Google hasht ihn serverseitig erneut und vergleicht ihn
-    // mit der code_challenge aus startLogin().
     const body = new URLSearchParams({
       client_id: GOOGLE_CONFIG.clientId,
       grant_type: "authorization_code",
@@ -197,8 +262,16 @@ export async function handleRedirectCallback() {
       return { status: "error", message: `Token-Austausch fehlgeschlagen (${response.status}): ${errorText}` };
     }
 
-    const tokenResponse = await response.json();
-    storeTokens(tokenResponse, null);
+    const json = await response.json();
+    storeTokens(
+      {
+        accessToken: json.access_token,
+        expiresInSeconds: json.expires_in,
+        refreshToken: json.refresh_token,
+        scope: json.scope,
+      },
+      null
+    );
     return { status: "connected" };
   } catch (err) {
     return { status: "error", message: `Netzwerkfehler beim Token-Austausch: ${err.message}` };
@@ -206,23 +279,10 @@ export async function handleRedirectCallback() {
 }
 
 /**
- * Tauscht das Refresh-Token gegen ein frisches Access-Token.
- *
- * Google rotiert Refresh-Tokens NICHT: Die Antwort enthält nur ein neues
- * access_token, das bestehende refresh_token bleibt gültig und wird von
- * storeTokens() weitergetragen.
- *
- * Schlägt der Refresh fehl (Zugriff in den Google-Kontoeinstellungen
- * widerrufen, Token nach längerer Inaktivität verfallen), löschen wir die
- * gespeicherten Tokens – die App schickt den Nutzer dann sichtbar durch
- * startLogin(), statt endlos gegen einen toten Endpunkt zu laufen.
+ * Nur Weg B: Tauscht das Refresh-Token gegen ein frisches Access-Token.
+ * Google rotiert Refresh-Tokens nicht – das bestehende bleibt gültig.
  */
 async function refreshAccessToken(stored) {
-  if (!stored.refreshToken) {
-    logout();
-    throw new Error("Sitzung abgelaufen – bitte erneut mit Google verbinden.");
-  }
-
   const body = new URLSearchParams({
     client_id: GOOGLE_CONFIG.clientId,
     grant_type: "refresh_token",
@@ -240,8 +300,11 @@ async function refreshAccessToken(stored) {
     throw new Error(`Token-Erneuerung fehlgeschlagen (${response.status}) – bitte erneut mit Google verbinden.`);
   }
 
-  const tokenResponse = await response.json();
-  return storeTokens(tokenResponse, stored);
+  const json = await response.json();
+  return storeTokens(
+    { accessToken: json.access_token, expiresInSeconds: json.expires_in, scope: json.scope },
+    stored
+  );
 }
 
 /**
@@ -258,9 +321,14 @@ export async function getValidAccessToken() {
     throw new Error("Nicht mit Google verbunden.");
   }
 
-  const isExpiringSoon = Date.now() >= stored.expiresAtMs - EXPIRY_SAFETY_MARGIN_MS;
-  if (!isExpiringSoon) {
+  if (!isExpired(stored)) {
     return stored.accessToken;
+  }
+
+  // Weg A kann nicht per fetch erneuern – dafür braucht es einen Redirect,
+  // den die App beim nächsten Start anstößt (shouldAttemptSilentRenewal).
+  if (!usesCodeFlow() || !stored.refreshToken) {
+    throw new Error("Sitzung abgelaufen – bitte erneut mit Google verbinden.");
   }
 
   if (!inFlightRefresh) {
