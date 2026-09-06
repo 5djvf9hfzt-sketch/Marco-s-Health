@@ -120,7 +120,11 @@ export async function startLogin() {
     // Google überhaupt ein Refresh-Token ausstellt. Ohne sie müsste sich der
     // Nutzer stündlich neu anmelden.
     access_type: "offline",
-    prompt: "consent",
+    // select_account erzwingt zusätzlich die Kontoauswahl. Ohne das nimmt
+    // Google stillschweigend das im Browser zuletzt verwendete Konto – auf
+    // Geräten mit mehreren Google-Konten führt das zu einem "access_denied",
+    // dessen Ursache (falsches Konto) nicht erkennbar ist.
+    prompt: "select_account consent",
   });
 
   // include_granted_scopes wird bewusst NICHT gesetzt: zuvor erteilte
