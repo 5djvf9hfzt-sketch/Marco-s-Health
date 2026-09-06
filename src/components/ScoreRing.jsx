@@ -19,6 +19,7 @@ export default function ScoreRing({
   displayValue,
   suffix,
   note,
+  asOf,
   thickness = 9,
 }) {
   const hasValue = Number.isFinite(value);
@@ -61,6 +62,7 @@ export default function ScoreRing({
       </div>
       <div className="ring-label">{label}</div>
       {note && <div className="ring-note">{note}</div>}
+      {hasValue && asOf && <div className="ring-note">{asOf}</div>}
     </div>
   );
 }

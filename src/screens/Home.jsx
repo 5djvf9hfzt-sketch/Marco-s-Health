@@ -34,6 +34,60 @@ function historyFor(dayRecords, accessor, days = 14) {
   });
 }
 
+const MS_PER_DAY = 86_400_000;
+
+function ageInDays(dateIso) {
+  return Math.round((Date.now() - new Date(dateIso + "T12:00:00").getTime()) / MS_PER_DAY);
+}
+
+/** "gestern" / "vor 5 Tagen" – oder null, wenn der Wert von heute stammt. */
+function describeAge(dateIso) {
+  const days = ageInDays(dateIso);
+  if (days <= 0) return null;
+  return days === 1 ? "gestern" : `vor ${days} Tagen`;
+}
+
+/** Kurzform für die engen Kachel-Beschriftungen. */
+function describeAgeShort(dateIso) {
+  const days = ageInDays(dateIso);
+  if (days <= 0) return null;
+  return days === 1 ? "gestern" : `vor ${days} T`;
+}
+
+/**
+ * Sucht den jüngsten Tag, für den diese Metrik überhaupt einen Wert hat.
+ *
+ * Hintergrund: Wer die Uhr nicht jeden Tag trägt (oder sie hat heute noch
+ * nicht synchronisiert), hätte sonst ein komplett leeres Dashboard, obwohl
+ * Daten vorliegen. Statt "keine Daten" zeigen wir den letzten bekannten Wert
+ * und schreiben offen dazu, von wann er stammt.
+ */
+function latestValue(dayRecords, accessor) {
+  for (let i = dayRecords.length - 1; i >= 0; i -= 1) {
+    const value = accessor(dayRecords[i]);
+    if (Number.isFinite(value)) {
+      return {
+        value,
+        date: dayRecords[i].date,
+        asOf: describeAge(dayRecords[i].date),
+        asOfShort: describeAgeShort(dayRecords[i].date),
+      };
+    }
+  }
+  return { value: undefined, date: null, asOf: null, asOfShort: null };
+}
+
+/** Wie latestValue, aber für die berechneten Tagesscores. */
+function latestScore(dayRecords, compute) {
+  for (let i = dayRecords.length - 1; i >= 0; i -= 1) {
+    const result = compute(dayRecords, dayRecords[i].date);
+    if (result && Number.isFinite(result.score)) {
+      return { ...result, date: dayRecords[i].date, asOf: describeAge(dayRecords[i].date) };
+    }
+  }
+  return null;
+}
+
 export default function Home() {
   const { state, actions } = useAppState();
   const { dayRecords } = state;
@@ -41,23 +95,49 @@ export default function Home() {
   const view = useMemo(() => {
     if (dayRecords.length === 0) return null;
     const date = dayRecords[dayRecords.length - 1].date;
-    const today = dayRecords[dayRecords.length - 1];
+
+    // Pro Metrik der jeweils jüngste vorhandene Wert – nicht zwingend von
+    // heute, dafür aber überhaupt vorhanden (siehe latestValue).
+    const vitals = {
+      hrv: latestValue(dayRecords, (r) => r.hrv),
+      restingHeartRate: latestValue(dayRecords, (r) => r.restingHeartRate),
+      spo2: latestValue(dayRecords, (r) => r.spo2),
+      breathingRate: latestValue(dayRecords, (r) => r.breathingRate),
+      cardioFitness: latestValue(dayRecords, (r) => r.cardioFitness),
+      steps: latestValue(dayRecords, (r) => r.steps),
+      calories: latestValue(dayRecords, (r) => r.calories),
+      zoneMinutes: latestValue(dayRecords, (r) => r.moderateVigorousZoneMinutes ?? r.veryActiveMinutes),
+    };
+
+    // Die letzte Nacht mit Schlafdaten (nicht unbedingt die vergangene).
+    const lastSleepDate = latestValue(dayRecords, (r) => r.sleepDurationMin).date;
+    const lastSleepRecord = lastSleepDate ? dayRecords.find((r) => r.date === lastSleepDate) : null;
 
     return {
       date,
-      today,
-      recovery: computeRecoveryScore(dayRecords, date),
-      strain: computeStrainScore(dayRecords, date),
-      sleep: computeSleepScore(dayRecords, date),
+      vitals,
+      lastSleepRecord,
+      lastSleepAsOf: lastSleepDate ? describeAge(lastSleepDate) : null,
+      recovery: latestScore(dayRecords, computeRecoveryScore),
+      strain: latestScore(dayRecords, computeStrainScore),
+      sleep: latestScore(dayRecords, computeSleepScore),
       sleepDebt: computeSleepDebtMinutes(dayRecords, date, 7),
       weeklyActive: computeWeeklyActiveMinutes(dayRecords, date, 7),
+      // Die Abweichung bezieht sich jeweils auf den Tag, aus dem der
+      // angezeigte Wert stammt – sonst würde man Äpfel mit Birnen vergleichen.
       deltas: {
-        hrv: computeDelta(dayRecords, (r) => r.hrv, date),
-        restingHeartRate: computeDelta(dayRecords, (r) => r.restingHeartRate, date),
-        spo2: computeDelta(dayRecords, (r) => r.spo2, date),
-        breathingRate: computeDelta(dayRecords, (r) => r.breathingRate, date),
-        cardioFitness: computeDelta(dayRecords, (r) => r.cardioFitness, date),
-        steps: computeDelta(dayRecords, (r) => r.steps, date),
+        hrv: vitals.hrv.date ? computeDelta(dayRecords, (r) => r.hrv, vitals.hrv.date) : null,
+        restingHeartRate: vitals.restingHeartRate.date
+          ? computeDelta(dayRecords, (r) => r.restingHeartRate, vitals.restingHeartRate.date)
+          : null,
+        spo2: vitals.spo2.date ? computeDelta(dayRecords, (r) => r.spo2, vitals.spo2.date) : null,
+        breathingRate: vitals.breathingRate.date
+          ? computeDelta(dayRecords, (r) => r.breathingRate, vitals.breathingRate.date)
+          : null,
+        cardioFitness: vitals.cardioFitness.date
+          ? computeDelta(dayRecords, (r) => r.cardioFitness, vitals.cardioFitness.date)
+          : null,
+        steps: vitals.steps.date ? computeDelta(dayRecords, (r) => r.steps, vitals.steps.date) : null,
       },
     };
   }, [dayRecords]);
@@ -73,7 +153,7 @@ export default function Home() {
       <div className="screen-header">
         <div>
           <h1 className="screen-title">Heute</h1>
-          <p className="screen-subtitle">{view ? formatDate(view.date) : "Noch keine Daten"}</p>
+          <p className="screen-subtitle">{formatDate(new Date().toISOString().slice(0, 10))}</p>
         </div>
         <button className="sync-pill" onClick={() => actions.runSync()} disabled={state.isSyncing}>
           {state.isSyncing && <span className="spinner" />}
@@ -120,6 +200,7 @@ export default function Home() {
                 : "var(--recovery)"
           }
           note={view?.recovery && !view.recovery.hasEnoughBaseline ? "Baseline wächst" : undefined}
+          asOf={view?.recovery?.asOf}
         />
         <ScoreRing
           id="sleep"
@@ -129,7 +210,8 @@ export default function Home() {
           suffix="%"
           colorFrom="#5b3fd6"
           colorTo="var(--sleep)"
-          note={view?.today?.sleepDurationMin ? formatDuration(view.today.sleepDurationMin) : undefined}
+          note={view?.lastSleepRecord?.sleepDurationMin ? formatDuration(view.lastSleepRecord.sleepDurationMin) : undefined}
+          asOf={view?.sleep?.asOf}
         />
         <ScoreRing
           id="strain"
@@ -144,6 +226,7 @@ export default function Home() {
           suffix="von 21"
           colorFrom="#1d6ff2"
           colorTo="var(--strain)"
+          asOf={view?.strain?.asOf}
         />
       </div>
 
@@ -151,96 +234,104 @@ export default function Home() {
       <div className="metric-grid">
         <MetricTile
           label="HRV"
-          value={view?.today?.hrv}
+          value={view?.vitals.hrv.value}
           unit="ms"
           decimals={0}
           delta={view?.deltas.hrv}
           higherIsBetter
           history={historyFor(dayRecords, (r) => r.hrv)}
+          asOf={view?.vitals.hrv.asOfShort}
           color="var(--recovery)"
         />
         <MetricTile
           label="Ruhepuls"
-          value={view?.today?.restingHeartRate}
+          value={view?.vitals.restingHeartRate.value}
           unit="bpm"
           decimals={0}
           delta={view?.deltas.restingHeartRate}
           higherIsBetter={false}
           history={historyFor(dayRecords, (r) => r.restingHeartRate)}
+          asOf={view?.vitals.restingHeartRate.asOfShort}
           color="var(--recovery-low)"
         />
         <MetricTile
           label="SpO₂"
-          value={view?.today?.spo2}
+          value={view?.vitals.spo2.value}
           unit="%"
           decimals={1}
           delta={view?.deltas.spo2}
           higherIsBetter
           history={historyFor(dayRecords, (r) => r.spo2)}
+          asOf={view?.vitals.spo2.asOfShort}
           color="var(--strain)"
         />
         <MetricTile
           label="Atemfrequenz"
-          value={view?.today?.breathingRate}
+          value={view?.vitals.breathingRate.value}
           unit="/min"
           decimals={1}
           delta={view?.deltas.breathingRate}
           higherIsBetter={false}
           history={historyFor(dayRecords, (r) => r.breathingRate)}
+          asOf={view?.vitals.breathingRate.asOfShort}
           color="var(--sleep)"
         />
         <MetricTile
           label="VO₂max"
-          value={view?.today?.cardioFitness}
+          value={view?.vitals.cardioFitness.value}
           unit="ml/kg/min"
           decimals={0}
           delta={view?.deltas.cardioFitness}
           higherIsBetter
           history={historyFor(dayRecords, (r) => r.cardioFitness)}
+          asOf={view?.vitals.cardioFitness.asOfShort}
           color="var(--recovery)"
         />
         <MetricTile
           label="Schritte"
-          value={view?.today?.steps}
+          value={view?.vitals.steps.value}
           unit=""
           decimals={0}
           delta={view?.deltas.steps}
           higherIsBetter
           history={historyFor(dayRecords, (r) => r.steps)}
+          asOf={view?.vitals.steps.asOfShort}
           color="var(--strain)"
         />
       </div>
 
-      <div className="section-label">Schlaf letzte Nacht</div>
+      <div className="section-label">
+        Schlaf{view?.lastSleepAsOf ? ` · ${view.lastSleepAsOf}` : " letzte Nacht"}
+      </div>
       <div className="card">
-        {view?.today?.sleepDurationMin ? (
+        {view?.lastSleepRecord?.sleepDurationMin ? (
           <>
             <div className="card-head" style={{ marginBottom: 16 }}>
               <div>
                 <div className="eyebrow">Schlafdauer</div>
                 <div style={{ fontSize: 30, fontWeight: 700, marginTop: 4 }} className="num">
-                  {formatDuration(view.today.sleepDurationMin)}
+                  {formatDuration(view.lastSleepRecord.sleepDurationMin)}
                 </div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div className="eyebrow">Effizienz</div>
                 <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }} className="num">
-                  {view.today.sleepEfficiency ?? "–"}%
+                  {view.lastSleepRecord.sleepEfficiency ?? "–"}%
                 </div>
               </div>
             </div>
 
-            <SleepStagesBar stages={view.today.sleepStages} />
+            <SleepStagesBar stages={view.lastSleepRecord.sleepStages} />
 
             <div style={{ marginTop: 16 }}>
               <div className="kv-row">
                 <span className="muted">Zeit im Bett</span>
-                <span className="value">{formatDuration(view.today.timeInBedMin)}</span>
+                <span className="value">{formatDuration(view.lastSleepRecord.timeInBedMin)}</span>
               </div>
               <div className="kv-row">
                 <span className="muted">Einschlafzeit</span>
                 <span className="value">
-                  {formatClockMinutes(parseLocalClockMinutes(view.today.sleepStartTime)) ?? "–"}
+                  {formatClockMinutes(parseLocalClockMinutes(view.lastSleepRecord.sleepStartTime)) ?? "–"}
                 </span>
               </div>
               <div className="kv-row">
@@ -256,7 +347,7 @@ export default function Home() {
             </div>
           </>
         ) : (
-          <p className="empty-state">Keine Schlafdaten für die letzte Nacht</p>
+          <p className="empty-state">Noch keine Schlafdaten vorhanden</p>
         )}
       </div>
 
@@ -289,15 +380,19 @@ export default function Home() {
 
         <div style={{ marginTop: 14 }}>
           <div className="kv-row">
-            <span className="muted">Kalorien heute</span>
+            <span className="muted">Kalorien{view?.vitals.calories.asOf ? ` · ${view.vitals.calories.asOf}` : ""}</span>
             <span className="value">
-              {Number.isFinite(view?.today?.calories) ? `${Math.round(view.today.calories).toLocaleString("de-DE")} kcal` : "–"}
+              {Number.isFinite(view?.vitals.calories.value)
+                ? `${Math.round(view.vitals.calories.value).toLocaleString("de-DE")} kcal`
+                : "–"}
             </span>
           </div>
           <div className="kv-row">
-            <span className="muted">Intensive Zonenminuten heute</span>
+            <span className="muted">
+              Intensive Zonenminuten{view?.vitals.zoneMinutes.asOf ? ` · ${view.vitals.zoneMinutes.asOf}` : ""}
+            </span>
             <span className="value">
-              {view?.today?.moderateVigorousZoneMinutes ?? view?.today?.veryActiveMinutes ?? "–"}
+              {view?.vitals.zoneMinutes.value ?? "–"}
             </span>
           </div>
         </div>

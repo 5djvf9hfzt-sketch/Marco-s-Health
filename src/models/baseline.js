@@ -135,17 +135,19 @@ export function computeWeeklyActiveMinutes(dayRecords, endDateIso, windowDays = 
   return any ? total : null;
 }
 
-/** Anzahl Tage mit mindestens einem gespeicherten Messwert (Basis für den Confidence-Indikator). */
+/**
+ * Anzahl Tage mit mindestens einem körperlichen Messwert – Grundlage für den
+ * Confidence-Indikator des biologischen Alters.
+ *
+ * Schritte zählen hier bewusst NICHT mit: Sie kommen häufig vom Telefon und
+ * sind auch an Tagen vorhanden, an denen die Uhr gar nicht getragen wurde.
+ * Solche Tage als "Messtage" zu zählen, würde eine hohe Konfidenz vortäuschen,
+ * obwohl die für das Bio-Alter entscheidenden Werte (Puls, HRV, Schlaf) fehlen.
+ */
 export function countDaysWithData(dayRecords) {
   return dayRecords.filter((r) =>
-    [
-      r.restingHeartRate,
-      r.hrv,
-      r.sleepDurationMin,
-      r.steps,
-      r.spo2,
-      r.breathingRate,
-      r.cardioFitness,
-    ].some((v) => Number.isFinite(v))
+    [r.restingHeartRate, r.hrv, r.sleepDurationMin, r.spo2, r.breathingRate, r.cardioFitness].some((v) =>
+      Number.isFinite(v)
+    )
   ).length;
 }

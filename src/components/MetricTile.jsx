@@ -23,6 +23,7 @@ export default function MetricTile({
   higherIsBetter = true,
   history = [],
   color = "var(--text-dim)",
+  asOf,
 }) {
   const hasValue = Number.isFinite(value);
 
@@ -39,7 +40,12 @@ export default function MetricTile({
 
   return (
     <div className="metric-tile">
-      <div className="metric-tile-label">{label}</div>
+      <div className="metric-tile-label">
+        {label}
+        {/* Stammt der Wert nicht von heute, wird das offen ausgewiesen, statt
+            einen älteren Messwert als aktuell auszugeben. */}
+        {hasValue && asOf && <span style={{ color: "var(--text-faint)", marginLeft: 5 }}>· {asOf}</span>}
+      </div>
       <div className="metric-tile-value">
         {hasValue ? (
           <>
